@@ -1,0 +1,133 @@
+{
+  "model": "dtw_template_matching",
+  "features": "orientation-free",
+  "evaluation": "random 25% split",
+  "accuracy": 0.9149,
+  "n_train": 280,
+  "n_test": 94,
+  "n_total": 374,
+  "labels": [
+    "Jordan",
+    "help",
+    "no",
+    "nothing",
+    "students",
+    "water",
+    "yes"
+  ],
+  "confusion_matrix": [
+    [
+      13,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      11,
+      3,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      13,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      1,
+      13,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      14,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      1,
+      0,
+      12,
+      0
+    ],
+    [
+      0,
+      1,
+      2,
+      0,
+      0,
+      0,
+      10
+    ]
+  ],
+  "per_class": {
+    "Jordan": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "support": 13
+    },
+    "help": {
+      "precision": 0.917,
+      "recall": 0.786,
+      "support": 14
+    },
+    "no": {
+      "precision": 0.684,
+      "recall": 1.0,
+      "support": 13
+    },
+    "nothing": {
+      "precision": 0.929,
+      "recall": 0.929,
+      "support": 14
+    },
+    "students": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "support": 14
+    },
+    "water": {
+      "precision": 1.0,
+      "recall": 0.923,
+      "support": 13
+    },
+    "yes": {
+      "precision": 1.0,
+      "recall": 0.769,
+      "support": 13
+    }
+  },
+  "confidence_threshold": 0.7,
+  "accepted_fraction": 0.8617,
+  "accuracy_when_accepted": 0.9877,
+  "class_counts": {
+    "Jordan": 52,
+    "help": 55,
+    "no": 53,
+    "nothing": 55,
+    "students": 54,
+    "water": 54,
+    "yes": 51
+  },
+  "trained_at": "2026-11-07T18:20:49-0500"
+}

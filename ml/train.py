@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from ml.preprocess import SENSOR_CHIN, SENSOR_HEAD, get_preprocessor
-from ml.silent_model import SilentSpeechCNN, SilentSpeechRF
+from ml.silent_model import SilentSpeechCNN, SilentSpeechDTW, SilentSpeechRF
 
 REPO = Path(__file__).resolve().parent.parent
 CLIP_RE = re.compile(r"(\d+)_(\w+?)_(.*)_s(-?\d+)\.csv$")  # same naming as backend/recorder.py
@@ -124,7 +124,7 @@ def main() -> None:
     ap.add_argument("--random-split", action="store_true", help="stratified random 25%% test split instead of holding out a session")
     ap.add_argument("--features", choices=["default", "orientation-free"], default="default",
                     help="orientation-free = only rotation-invariant signals (no dependence on how the sensors are mounted)")
-    ap.add_argument("--model", choices=["rf", "cnn"], default="rf", help="classifier to train")
+    ap.add_argument("--model", choices=["rf", "cnn", "dtw"], default="rf", help="classifier to train")
     ap.add_argument("--trees", type=int, default=500, help="random forest size")
     ap.add_argument("--epochs", type=int, default=40, help="CNN training epochs")
     ap.add_argument("--seed", type=int, default=42)
@@ -149,7 +149,8 @@ def main() -> None:
             print(f"! '{k}' has only {v} clips; aim for {MIN_PER_CLASS}+ per session")
 
     def make():
-        m = SilentSpeechCNN(args.epochs, args.seed) if args.model == "cnn" else SilentSpeechRF(args.trees, args.seed)
+        m = {"cnn": lambda: SilentSpeechCNN(args.epochs, args.seed), "dtw": lambda: SilentSpeechDTW(),
+             "rf": lambda: SilentSpeechRF(args.trees, args.seed)}[args.model]()
         m.preprocess = args.features  # the backend reads this to preprocess live data the same way
         return m
 
@@ -185,7 +186,7 @@ def main() -> None:
     joblib.dump(final, args.out / "model.joblib")
     (args.out / "labels.json").write_text(json.dumps([str(c) for c in final.classes_]))
     metrics = {
-        "model": "cnn" if args.model == "cnn" else "random_forest",
+        "model": {"cnn": "cnn", "dtw": "dtw_template_matching", "rf": "random_forest"}[args.model],
         "features": args.features,
         "evaluation": how,
         "accuracy": round(acc, 4),

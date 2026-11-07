@@ -108,3 +108,84 @@ class SilentSpeechCNN:
             net = _make_cnn(len(self._mean.reshape(-1)), len(self.classes_))
             net.load_state_dict(state["_net"])
             self._net = net.eval()
+
+
+class SilentSpeechDTW:
+    """DTW template matching: compare a new movement with every saved example of each word.
+
+    For each word the score is the mean of its k smallest DTW distances (k nearest templates),
+    so one odd recording cannot decide the result. Probabilities are a softmax over the negative
+    scores, scaled by the typical gap between words so the numbers are usable as confidences.
+    Same interface as the other models: (n, channels, steps) in, `predict_proba` / `classes_` out.
+    """
+
+    preprocess = "default"  # which ml.preprocess pipeline the training input came from (set by ml/train.py)
+
+    def __init__(self, k: int = 3, band: int = 10, factor: int = 2) -> None:
+        self.k, self.band, self.factor = k, band, factor
+        self.classes_ = np.array([])
+        self._templates = None
+        self._labels = None
+        self._scale = None
+        self._temp = 1.0
+
+    def _prep(self, X: np.ndarray) -> np.ndarray:
+        from ml.dtw import downsample
+
+        X = np.asarray(X, dtype=np.float32)
+        if X.ndim == 2:
+            X = X[None]
+        return downsample(X, self.factor) / self._scale[None, :, None]
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "SilentSpeechDTW":
+        X = np.asarray(X, dtype=np.float32)
+        self._scale = X.std(axis=(0, 2)).astype(np.float32) + 1e-6  # every channel counts equally
+        self._labels = np.asarray(y)
+        self.classes_ = np.unique(self._labels)
+        self._templates = self._prep(X)
+        self._calibrate()
+        return self
+
+    def _calibrate(self, n: int = 150) -> None:
+        """Pick the softmax temperature that makes the confidences honest: score some training
+        clips against all the OTHER templates and choose the temperature with the lowest log-loss."""
+        rng = np.random.default_rng(0)
+        idx = rng.choice(len(self._templates), size=min(n, len(self._templates)), replace=False)
+        rows, truth = [], []
+        for i in idx:
+            keep = np.arange(len(self._templates)) != i
+            rows.append(self._scores(self._templates[i], self._templates[keep], self._labels[keep]))
+            truth.append(int(np.flatnonzero(self.classes_ == self._labels[i])[0]))
+        D, truth = np.array(rows), np.array(truth)
+        best, self._temp = np.inf, 1.0
+        for t in np.geomspace(D.std() * 0.02, D.std() * 5, 60):
+            z = -D / t
+            z -= z.max(axis=1, keepdims=True)
+            logp = z - np.log(np.exp(z).sum(axis=1, keepdims=True))
+            nll = -logp[np.arange(len(truth)), truth].mean()
+            if nll < best:
+                best, self._temp = nll, float(t)
+
+    def _scores(self, q: np.ndarray, templates: np.ndarray, labels: np.ndarray) -> np.ndarray:
+        from ml.dtw import dtw_to_templates
+
+        d = dtw_to_templates(q, templates, self.band)
+        out = []
+        for c in self.classes_:
+            dc = np.sort(d[labels == c])
+            out.append(dc[: self.k].mean() if len(dc) else np.inf)
+        return np.array(out)
+
+    def distances(self, X: np.ndarray) -> np.ndarray:
+        """(n, classes) mean-of-k-nearest DTW distance per word (smaller = more similar)."""
+        Q = self._prep(X)
+        return np.stack([self._scores(q, self._templates, self._labels) for q in Q])
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        s = -self.distances(X) / self._temp
+        s -= s.max(axis=1, keepdims=True)
+        p = np.exp(s)
+        return p / p.sum(axis=1, keepdims=True)
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        return self.classes_[self.distances(X).argmin(1)]

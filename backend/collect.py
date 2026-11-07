@@ -17,7 +17,7 @@ import sys
 
 import numpy as np
 
-from backend.config import settings
+from backend.config import NOTHING, VOCAB, settings
 from backend.db import Database
 from backend.fake_stream import WORDS, FakeStream
 from backend.reader import Reader
@@ -69,8 +69,8 @@ async def collect(recorder: Recorder, reader: Reader, session: int, labels: list
     await asyncio.sleep(1.0)
     rates = reader.rates()
     print(f"Streaming: jaw {rates[0]:.0f} Hz, head {rates[1]:.0f} Hz. Session {session}.")
-    if labels:
-        print("Labels:", ", ".join(labels))
+    allowed = {w.lower(): w for w in [*VOCAB, NOTHING]}
+    print("Labels:", ", ".join(allowed.values()))
     last = labels[0] if labels else ""
     while True:
         counts = await recorder.counts()
@@ -82,6 +82,10 @@ async def collect(recorder: Recorder, reader: Reader, session: int, labels: list
         label = label or last
         if not label:
             continue
+        if label.lower() not in allowed:
+            print(f"'{label}' is not in the vocabulary. Use one of: {', '.join(allowed.values())}")
+            continue
+        label = allowed[label.lower()]
         last = label
         await ask(f"Press Enter to START '{label}'... ")
         recorder.start(label, session)

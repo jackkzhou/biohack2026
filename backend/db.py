@@ -31,7 +31,7 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS imu_samples (
         time timestamptz NOT NULL, sensor smallint NOT NULL,
         gx real, gy real, gz real, ax real, ay real, az real,
-        t_us bigint)""",
+        t_us bigint, qw real, qx real, qy real, qz real)""",
     "SELECT create_hypertable('imu_samples', 'time', if_not_exists => TRUE)",
     """CREATE TABLE IF NOT EXISTS clips (
         id bigint PRIMARY KEY, label text NOT NULL, session integer, source text NOT NULL,
@@ -41,8 +41,10 @@ SCHEMA = [
         clip_id bigint NOT NULL, label text NOT NULL, session integer,
         time timestamptz NOT NULL, sensor smallint NOT NULL,
         gx real, gy real, gz real, ax real, ay real, az real,
-        t_us bigint)""",
+        t_us bigint, qw real, qx real, qy real, qz real)""",
     "SELECT create_hypertable('clip_samples', 'time', if_not_exists => TRUE)",
+    "ALTER TABLE imu_samples ADD COLUMN IF NOT EXISTS qw real, ADD COLUMN IF NOT EXISTS qx real, ADD COLUMN IF NOT EXISTS qy real, ADD COLUMN IF NOT EXISTS qz real",
+    "ALTER TABLE clip_samples ADD COLUMN IF NOT EXISTS qw real, ADD COLUMN IF NOT EXISTS qx real, ADD COLUMN IF NOT EXISTS qy real, ADD COLUMN IF NOT EXISTS qz real",
     "CREATE INDEX IF NOT EXISTS clip_samples_clip_idx ON clip_samples (clip_id, time)",
     """CREATE TABLE IF NOT EXISTS phrases (
         id bigint PRIMARY KEY, at timestamptz NOT NULL, words text[] NOT NULL, sentence text NOT NULL)""",
@@ -54,9 +56,9 @@ SCHEMA = [
         chin double precision[], head double precision[], activity_rms double precision)""",
 ]
 
-# Same columns as the firmware line: t_us,sensor,gx,gy,gz,ax,ay,az (quaternions are always 0 and not stored).
+# Same columns as the firmware line: t_us,sensor,gx,gy,gz,ax,ay,az,qw,qx,qy,qz.
 # t_us is the ESP32 microsecond counter, unwrapped so it keeps increasing past the 32-bit rollover.
-SAMPLE_COLS = ["time", "sensor", "gx", "gy", "gz", "ax", "ay", "az", "t_us"]
+SAMPLE_COLS = ["time", "sensor", "gx", "gy", "gz", "ax", "ay", "az", "t_us", "qw", "qx", "qy", "qz"]
 CLIP_COLS = ["clip_id", "label", "session"] + SAMPLE_COLS
 
 
@@ -68,7 +70,7 @@ def _records(rows: np.ndarray, clip: dict | None = None) -> list[tuple]:
     """Ring rows [t, t_esp, g(3), a(3), q(4), sensor] -> DB tuples."""
     out = []
     for r in rows:
-        base = (_ts(r[0]), int(r[12]), *map(float, r[2:8]), int(round(r[1] * 1e6)))
+        base = (_ts(r[0]), int(r[12]), *map(float, r[2:8]), int(round(r[1] * 1e6)), *map(float, r[8:12]))
         out.append(base if clip is None else (clip["id"], clip["label"], clip["session"], *base))
     return out
 
@@ -167,12 +169,12 @@ class Database:
             if not meta:
                 return None
             recs = await con.fetch(
-                "SELECT time, t_us, gx, gy, gz, ax, ay, az, sensor FROM clip_samples WHERE clip_id=$1 ORDER BY time",
+                "SELECT time, t_us, gx, gy, gz, ax, ay, az, sensor, qw, qx, qy, qz FROM clip_samples WHERE clip_id=$1 ORDER BY time",
                 clip_id,
             )
             rows = np.array(
                 [[r["time"].timestamp(), r["t_us"] / 1e6, r["gx"], r["gy"], r["gz"], r["ax"], r["ay"], r["az"],
-                  0, 0, 0, 0, r["sensor"]] for r in recs],
+                  r["qw"] or 0, r["qx"] or 0, r["qy"] or 0, r["qz"] or 0, r["sensor"]] for r in recs],
                 dtype=np.float64,
             ).reshape(-1, 13)
             return dict(meta), rows
