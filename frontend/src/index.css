@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 246 248 249;
+  --surface: 255 255 255;
+  --surface-2: 237 242 243;
+  --border: 208 218 220;
+  --ink: 16 32 38;
+  --muted: 82 99 106;
+  --accent: 13 110 114;
+  --accent-ink: 255 255 255;
+  --ok: 21 128 61;
+  --warn: 161 98 7;
+  --danger: 185 28 28;
+  --s2: 194 100 0;
+  --s3: 109 40 217;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: 11 18 21;
+    --surface: 18 28 32;
+    --surface-2: 26 40 45;
+    --border: 42 59 65;
+    --ink: 232 240 242;
+    --muted: 150 169 176;
+    --accent: 94 205 208;
+    --accent-ink: 4 28 30;
+    --ok: 74 222 128;
+    --warn: 251 191 36;
+    --danger: 248 113 113;
+    --s2: 251 191 36;
+    --s3: 167 139 250;
+  }
+}
+
+@layer base {
+  html { font-size: 17px; }
+  body { @apply bg-bg text-ink antialiased; }
+  :focus-visible { outline: 3px solid rgb(var(--accent)); outline-offset: 2px; }
+}
+
+@layer components {
+  .card { @apply rounded-2xl border border-border bg-surface p-5 sm:p-6; }
+  .btn {
+    @apply inline-flex min-h-[3rem] items-center justify-center gap-2 rounded-xl border border-border bg-surface-2 px-5 text-base font-semibold text-ink transition-colors hover:border-accent disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary { @apply border-accent bg-accent text-accent-ink hover:opacity-90; }
+  .btn-active { @apply border-accent bg-accent/15 text-accent; }
+  .badge { @apply inline-flex items-center rounded-full border border-border px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-muted; }
+  .h-page { @apply text-3xl font-bold tracking-tight sm:text-4xl; }
+  .h-section { @apply text-xl font-semibold sm:text-2xl; }
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+.pop-in { animation: pop-in 0.25s ease-out; }
+
+@keyframes bar-bounce {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+.bar-bounce { animation: bar-bounce 0.8s ease-in-out infinite; transform-origin: bottom; }
+
+@keyframes fill-x {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pop-in, .bar-bounce { animation: none; }
+}
+
+.uplot, .uplot * { box-sizing: border-box; }
