@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -30,16 +31,17 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS imu_samples (
         time timestamptz NOT NULL, sensor smallint NOT NULL,
         gx real, gy real, gz real, ax real, ay real, az real,
-        qw real, qx real, qy real, qz real, t_esp double precision)""",
+        t_us bigint)""",
     "SELECT create_hypertable('imu_samples', 'time', if_not_exists => TRUE)",
     """CREATE TABLE IF NOT EXISTS clips (
         id bigint PRIMARY KEY, label text NOT NULL, session integer, source text NOT NULL,
         t_start timestamptz, t_end timestamptz, n_samples integer,
         created_at timestamptz NOT NULL DEFAULT now())""",
     """CREATE TABLE IF NOT EXISTS clip_samples (
-        clip_id bigint NOT NULL, time timestamptz NOT NULL, sensor smallint NOT NULL,
+        clip_id bigint NOT NULL, label text NOT NULL, session integer,
+        time timestamptz NOT NULL, sensor smallint NOT NULL,
         gx real, gy real, gz real, ax real, ay real, az real,
-        qw real, qx real, qy real, qz real, t_esp double precision)""",
+        t_us bigint)""",
     "SELECT create_hypertable('clip_samples', 'time', if_not_exists => TRUE)",
     "CREATE INDEX IF NOT EXISTS clip_samples_clip_idx ON clip_samples (clip_id, time)",
     """CREATE TABLE IF NOT EXISTS phrases (
@@ -52,20 +54,22 @@ SCHEMA = [
         chin double precision[], head double precision[], activity_rms double precision)""",
 ]
 
-SAMPLE_COLS = ["time", "sensor", "gx", "gy", "gz", "ax", "ay", "az", "qw", "qx", "qy", "qz", "t_esp"]
-CLIP_COLS = ["clip_id"] + SAMPLE_COLS
+# Same columns as the firmware line: t_us,sensor,gx,gy,gz,ax,ay,az (quaternions are always 0 and not stored).
+# t_us is the ESP32 microsecond counter, unwrapped so it keeps increasing past the 32-bit rollover.
+SAMPLE_COLS = ["time", "sensor", "gx", "gy", "gz", "ax", "ay", "az", "t_us"]
+CLIP_COLS = ["clip_id", "label", "session"] + SAMPLE_COLS
 
 
 def _ts(t: float) -> datetime:
     return datetime.fromtimestamp(t, tz=timezone.utc)
 
 
-def _records(rows: np.ndarray, clip_id: int | None = None) -> list[tuple]:
+def _records(rows: np.ndarray, clip: dict | None = None) -> list[tuple]:
     """Ring rows [t, t_esp, g(3), a(3), q(4), sensor] -> DB tuples."""
     out = []
     for r in rows:
-        base = (_ts(r[0]), int(r[12]), *map(float, r[2:12]), float(r[1]))
-        out.append(base if clip_id is None else (clip_id, *base))
+        base = (_ts(r[0]), int(r[12]), *map(float, r[2:8]), int(round(r[1] * 1e6)))
+        out.append(base if clip is None else (clip["id"], clip["label"], clip["session"], *base))
     return out
 
 
@@ -101,6 +105,18 @@ class Database:
                 self._task.cancel()
         if self._pool:
             await self._pool.close()
+
+    @property
+    def pending(self) -> int:
+        """Writes (clips, deletes, phrases...) still waiting to be stored."""
+        return len(self._ops)
+
+    async def wait_flushed(self, timeout: float) -> bool:
+        """Wait until queued writes are stored. False if the database never caught up."""
+        end = time.monotonic() + timeout
+        while self._ops and time.monotonic() < end:
+            await asyncio.sleep(0.2)
+        return not self._ops
 
     # ---- write API (never blocks, never raises) --------------------------
     def push_sample(self, row: np.ndarray) -> None:
@@ -151,12 +167,12 @@ class Database:
             if not meta:
                 return None
             recs = await con.fetch(
-                "SELECT time, t_esp, gx, gy, gz, ax, ay, az, qw, qx, qy, qz, sensor FROM clip_samples WHERE clip_id=$1 ORDER BY time",
+                "SELECT time, t_us, gx, gy, gz, ax, ay, az, sensor FROM clip_samples WHERE clip_id=$1 ORDER BY time",
                 clip_id,
             )
             rows = np.array(
-                [[r["time"].timestamp(), r["t_esp"], r["gx"], r["gy"], r["gz"], r["ax"], r["ay"], r["az"],
-                  r["qw"], r["qx"], r["qy"], r["qz"], r["sensor"]] for r in recs],
+                [[r["time"].timestamp(), r["t_us"] / 1e6, r["gx"], r["gy"], r["gz"], r["ax"], r["ay"], r["az"],
+                  0, 0, 0, 0, r["sensor"]] for r in recs],
                 dtype=np.float64,
             ).reshape(-1, 13)
             return dict(meta), rows
@@ -254,12 +270,14 @@ class Database:
         if kind == "clip":
             _, m, rows = op
             async with con.transaction():
-                await con.execute(
+                status = await con.execute(
                     "INSERT INTO clips (id,label,session,source,t_start,t_end,n_samples) VALUES ($1,$2,$3,$4,$5,$6,$7) "
                     "ON CONFLICT (id) DO NOTHING",
                     m["id"], m["label"], m["session"], m["source"], _ts(m["t_start"]), _ts(m["t_end"]), len(rows),
                 )
-                await con.copy_records_to_table("clip_samples", records=_records(rows, m["id"]), columns=CLIP_COLS)
+                if status.endswith(" 0"):  # clip already stored (re-upload): do not duplicate its samples
+                    return
+                await con.copy_records_to_table("clip_samples", records=_records(rows, m), columns=CLIP_COLS)
         elif kind == "delete":
             async with con.transaction():
                 await con.execute("DELETE FROM clip_samples WHERE clip_id=$1", op[1])

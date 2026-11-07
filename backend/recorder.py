@@ -84,6 +84,7 @@ class Recorder:
         self._active: dict | None = None
         self._cache: OrderedDict[int, tuple[dict, np.ndarray]] = OrderedDict()
         self._last_id = 0
+        self.last: tuple[dict, np.ndarray] | None = None  # most recently saved clip
         self.on_rest_noise = None  # callback(rms) set by main
         self.on_record_start = None  # callback(label) set by main (fake stream hook)
 
@@ -100,6 +101,7 @@ class Recorder:
                 "t_start": float(rows[0, 0]), "t_end": float(rows[-1, 0])}
         np.savetxt(self._csv_path(meta), rows, delimiter=",", header=CSV_HEADER, comments="", fmt="%.6f")
         self._cache[meta["id"]] = (meta, rows)
+        self.last = (meta, rows)
         while len(self._cache) > CACHE_CLIPS:
             self._cache.popitem(last=False)
         self.db.save_clip(meta, rows)

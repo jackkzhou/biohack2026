@@ -26,10 +26,10 @@ ESP32 (C++) ──USB / Bluetooth──▶ Python backend (FastAPI) ──WebSoc
 
 ESP32 DevKit + 2× Adafruit BNO085 (chin = articulation, behind ear = head-motion reference).
 
-| | Chin IMU | Head IMU |
+| | Jaw IMU (sensor 0) | Head IMU (sensor 1, still) |
 |---|---|---|
 | Power / GND | 3V3 / GND (via rails) | 3V3 / GND (via rails) |
-| SDA / SCL | D21 / D22 | D18 / D19 |
+| SDA / SCL | D18 / D19 | D21 / D22 |
 
 ## Repo
 
@@ -52,6 +52,16 @@ cp backend/.env.example backend/.env   # set FAKE_STREAM=true to run without har
 uvicorn backend.main:app --reload      # run from the repo root
 cd frontend && npm install && npm run dev
 ```
+
+### Collect a dataset
+
+Flash the firmware (`cd firmware && pio run -t upload`), set `SERIAL_PORT` and `TIGER_DB_URL` in `backend/.env`, stop the uvicorn server (only one program can open the serial port), then:
+
+```bash
+python -m backend.collect --labels help yes no Jordan water nothing
+```
+
+Type a label, press Enter to start, speak/mouth the word, the take stops by itself after 3 seconds. Each take (accel + gyro, both IMUs, ~200 Hz) is saved to `data/clips/*.csv` and sent to Tiger Data. If the database was unreachable, run `python -m backend.collect --upload` later; it skips clips already stored.
 
 Set `SERIAL_PORT`, `TIGER_DB_URL`, `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` in `backend/.env`.
 
