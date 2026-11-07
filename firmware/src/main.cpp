@@ -235,7 +235,41 @@ void setup() {
   xTaskCreatePinnedToCore(sensorTask, "head", 6144, &head, 2, nullptr, 1);
 }
 
+// The laptop can drive the onboard LED to show sensor orientation: "O<m>\n" with
+//   m=1 slow blink (neither sensor oriented right), 2 fast blink (one), 3 solid (both),
+//   0 = back to normal. Without a fresh command for 2 s it falls back to normal, where
+//   the LED means "both IMUs are streaming".
+static uint8_t orientMode = 0;
+static uint32_t orientAt = 0;
+
+static void pollCommands() {
+  static char cmd[8];
+  static size_t n = 0;
+  while (Serial.available()) {
+    char ch = (char)Serial.read();
+    if (ch == '\n') {
+      if (n == 2 && cmd[0] == 'O' && cmd[1] >= '0' && cmd[1] <= '3') {
+        orientMode = cmd[1] - '0';
+        orientAt = millis();
+      }
+      n = 0;
+    } else if (ch != '\r' && n < sizeof(cmd)) {
+      cmd[n++] = ch;
+    }
+  }
+}
+
 void loop() {
-  digitalWrite(LED_PIN, jaw.up && head.up ? HIGH : LOW);
-  delay(100);
+  pollCommands();
+  uint32_t now = millis();
+  if (orientMode && now - orientAt > 2000) orientMode = 0;
+  bool on;
+  switch (orientMode) {
+    case 1: on = (now / 700) % 2 == 0; break;
+    case 2: on = (now / 120) % 2 == 0; break;
+    case 3: on = true; break;
+    default: on = jaw.up && head.up;
+  }
+  digitalWrite(LED_PIN, on ? HIGH : LOW);
+  delay(20);
 }

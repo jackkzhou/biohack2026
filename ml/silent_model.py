@@ -30,6 +30,8 @@ def features(X: np.ndarray) -> np.ndarray:
 class SilentSpeechRF:
     """Random forest on summary + temporal-shape features of a preprocessed word."""
 
+    preprocess = "default"  # which ml.preprocess pipeline the training input came from (set by ml/train.py)
+
     def __init__(self, n_estimators: int = 500, random_state: int = 42) -> None:
         from sklearn.ensemble import RandomForestClassifier
 
@@ -60,6 +62,8 @@ class SilentSpeechCNN:
     plain state_dict (the network class is defined inside a factory function,
     so the module itself can't be pickled), and always runs on CPU once loaded.
     """
+
+    preprocess = "default"  # which ml.preprocess pipeline the training input came from (set by ml/train.py)
 
     def __init__(self, epochs: int = 40, random_state: int = 42) -> None:
         self.epochs, self.random_state = epochs, random_state

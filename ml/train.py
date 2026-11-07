@@ -28,7 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ml.preprocess import SENSOR_CHIN, SENSOR_HEAD, preprocess_window
+from ml.preprocess import SENSOR_CHIN, SENSOR_HEAD, get_preprocessor
 from ml.silent_model import SilentSpeechCNN, SilentSpeechRF
 
 REPO = Path(__file__).resolve().parent.parent
@@ -37,7 +37,8 @@ MIN_PER_CLASS = 15
 
 
 def load_clips(clip_dir: Path, sources: list[str], threshold: float, vocab: set[str] | None,
-               relabel: dict[str, str] | None = None):
+               relabel: dict[str, str] | None = None, features: str = "default"):
+    preprocess = get_preprocessor(features)
     X, y, sessions, skipped = [], [], [], 0
     spelling: dict[str, str] = {}  # "jordan" -> "Jordan" (first spelling seen), so typos in case don't split a class
     for p in sorted(clip_dir.glob("*.csv")):
@@ -53,7 +54,7 @@ def load_clips(clip_dir: Path, sources: list[str], threshold: float, vocab: set[
             skipped += 1
             continue
         chin, head = rows[rows[:, 12] == SENSOR_CHIN], rows[rows[:, 12] == SENSOR_HEAD]
-        x = preprocess_window(chin, head, threshold=threshold)
+        x = preprocess(chin, head, threshold=threshold)
         if x is None:
             skipped += 1
             continue
@@ -121,6 +122,8 @@ def main() -> None:
     ap.add_argument("--sessions", nargs="+", type=int, help="only use clips from these sessions")
     ap.add_argument("--relabel", nargs="+", default=[], metavar="OLD=NEW", help="fix mislabeled clips without renaming files")
     ap.add_argument("--random-split", action="store_true", help="stratified random 25%% test split instead of holding out a session")
+    ap.add_argument("--features", choices=["default", "orientation-free"], default="default",
+                    help="orientation-free = only rotation-invariant signals (no dependence on how the sensors are mounted)")
     ap.add_argument("--model", choices=["rf", "cnn"], default="rf", help="classifier to train")
     ap.add_argument("--trees", type=int, default=500, help="random forest size")
     ap.add_argument("--epochs", type=int, default=40, help="CNN training epochs")
@@ -131,7 +134,7 @@ def main() -> None:
     if vocab is None and "learn" in args.source:
         sys.exit("With --source learn, pass --vocab (e.g. --vocab help yes no Jordan water nothing)")
     relabel = {k.lower(): v for k, v in (r.split("=", 1) for r in args.relabel)}
-    X, y, sessions = load_clips(args.clips, args.source, args.threshold, vocab, relabel)
+    X, y, sessions = load_clips(args.clips, args.source, args.threshold, vocab, relabel, args.features)
     if args.sessions:
         keep = np.isin(sessions, args.sessions)
         X, y, sessions = X[keep], y[keep], sessions[keep]
@@ -146,7 +149,9 @@ def main() -> None:
             print(f"! '{k}' has only {v} clips; aim for {MIN_PER_CLASS}+ per session")
 
     def make():
-        return SilentSpeechCNN(args.epochs, args.seed) if args.model == "cnn" else SilentSpeechRF(args.trees, args.seed)
+        m = SilentSpeechCNN(args.epochs, args.seed) if args.model == "cnn" else SilentSpeechRF(args.trees, args.seed)
+        m.preprocess = args.features  # the backend reads this to preprocess live data the same way
+        return m
 
     tr, te, how = split(y, sessions, args.test_session, args.seed, args.random_split)
     model = make().fit(X[tr], y[tr])
@@ -181,6 +186,7 @@ def main() -> None:
     (args.out / "labels.json").write_text(json.dumps([str(c) for c in final.classes_]))
     metrics = {
         "model": "cnn" if args.model == "cnn" else "random_forest",
+        "features": args.features,
         "evaluation": how,
         "accuracy": round(acc, 4),
         "n_train": int(tr.sum()),

@@ -121,6 +121,7 @@ class Reader:
         self.dropped = 0  # CSV-looking lines that could not be parsed
         self._last_rx = 0.0
         self._port_open = False
+        self._ser = None  # open serial.Serial while connected (for send())
         self._skip_first = True
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -140,6 +141,17 @@ class Reader:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2)
+
+    def send(self, data: bytes) -> bool:
+        """Write a command line to the board (e.g. the orientation LED). False if the port is not open."""
+        ser = self._ser
+        if ser is None:
+            return False
+        try:
+            ser.write(data)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def add_sink(self, fn: Callable[[np.ndarray], None]) -> None:
         """fn(row) is called for every parsed sample (any thread; must not block)."""
@@ -165,6 +177,7 @@ class Reader:
             try:
                 ser.reset_input_buffer()  # drop stale bytes so the first clock offset is not skewed by backlog
                 self._reset_stream()
+                self._ser = ser
                 self._port_open = True
                 buf = bytearray()
                 while not self._stop.is_set():
@@ -183,6 +196,7 @@ class Reader:
                 log.warning("serial error: %s; reconnecting", e)
             finally:
                 self._port_open = False
+                self._ser = None
                 try:
                     ser.close()
                 except Exception:  # noqa: BLE001
