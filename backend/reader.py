@@ -20,7 +20,11 @@ from typing import Callable
 
 import numpy as np
 
-from ml.preprocess import NCOLS, SENSOR_CHIN, SENSOR_HEAD
+# Row layout of every stored sample (one row per reading):
+#   0 t (laptop s, epoch) | 1 t_esp (s) | 2-4 gx gy gz | 5-7 ax ay az | 8-11 qw qx qy qz | 12 sensor
+NCOLS = 13
+SENSOR_CHIN, SENSOR_HEAD = 0, 1
+GYRO = slice(2, 5)
 
 log = logging.getLogger("reader")
 
