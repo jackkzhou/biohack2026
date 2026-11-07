@@ -26,7 +26,7 @@ _SIG = {
     "water": (1.2, (0.0, 1.0, 1.0)),
 }
 WORD_S = 0.7
-HZ = 200
+HZ = 100
 
 
 class FakeStream:

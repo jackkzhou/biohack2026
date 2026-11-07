@@ -61,7 +61,7 @@ Flash the firmware (`cd firmware && pio run -t upload`), set `SERIAL_PORT` and `
 python -m backend.collect --labels help yes no Jordan water nothing
 ```
 
-Type a label, press Enter to start, speak/mouth the word, the take stops by itself after 3 seconds. Each take (accel + gyro, both IMUs, ~200 Hz) is saved to `data/clips/*.csv` and sent to Tiger Data. If the database was unreachable, run `python -m backend.collect --upload` later; it skips clips already stored.
+Type a label, press Enter to start, speak/mouth the word, the take stops by itself after 3 seconds. Each take (accel + gyro, both IMUs, ~100 Hz) is saved to `data/clips/*.csv` and sent to Tiger Data. If the database was unreachable, run `python -m backend.collect --upload` later; it skips clips already stored.
 
 Set `SERIAL_PORT`, `TIGER_DB_URL`, `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` in `backend/.env`.
 
