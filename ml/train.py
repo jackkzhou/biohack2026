@@ -3,6 +3,7 @@
     python -m ml.train                       # held-out = latest session
     python -m ml.train --test-session 2      # pick the held-out session
     python -m ml.train --source record learn # also use Learn-mode clips
+    python -m ml.train --model cnn           # 1D CNN instead of the random forest (needs torch)
 
 Reads the clips written by `backend.collect` / the Record page (data/clips/*.csv),
 runs every clip through the same `preprocess_window` the live backend uses,
@@ -28,21 +29,23 @@ from pathlib import Path
 import numpy as np
 
 from ml.preprocess import SENSOR_CHIN, SENSOR_HEAD, preprocess_window
-from ml.silent_model import SilentSpeechRF
+from ml.silent_model import SilentSpeechCNN, SilentSpeechRF
 
 REPO = Path(__file__).resolve().parent.parent
 CLIP_RE = re.compile(r"(\d+)_(\w+?)_(.*)_s(-?\d+)\.csv$")  # same naming as backend/recorder.py
 MIN_PER_CLASS = 15
 
 
-def load_clips(clip_dir: Path, sources: list[str], threshold: float, vocab: set[str] | None):
+def load_clips(clip_dir: Path, sources: list[str], threshold: float, vocab: set[str] | None,
+               relabel: dict[str, str] | None = None):
     X, y, sessions, skipped = [], [], [], 0
     spelling: dict[str, str] = {}  # "jordan" -> "Jordan" (first spelling seen), so typos in case don't split a class
     for p in sorted(clip_dir.glob("*.csv")):
         m = CLIP_RE.match(p.name)
         if not m or m[2] not in sources:
             continue
-        label = spelling.setdefault(m[3].lower(), m[3])
+        name = (relabel or {}).get(m[3].lower(), m[3])
+        label = spelling.setdefault(name.lower(), name)
         if vocab is not None and label.lower() not in vocab:
             continue  # e.g. Learn mode saves every word Whisper heard ("the", "I", ...)
         rows = np.loadtxt(p, delimiter=",", skiprows=1, ndmin=2)
@@ -62,11 +65,11 @@ def load_clips(clip_dir: Path, sources: list[str], threshold: float, vocab: set[
     return np.stack(X) if X else np.empty((0,)), np.array(y), np.array(sessions)
 
 
-def split(y: np.ndarray, sessions: np.ndarray, test_session: int | None, seed: int):
+def split(y: np.ndarray, sessions: np.ndarray, test_session: int | None, seed: int, random_split: bool = False):
     uniq = sorted(set(sessions.tolist()))
-    if test_session is None and len(uniq) >= 2:
+    if test_session is None and len(uniq) >= 2 and not random_split:
         test_session = uniq[-1]
-    if test_session is not None:
+    if test_session is not None and not random_split:
         te = sessions == test_session
         if not te.any() or te.all():
             sys.exit(f"session {test_session} can't be the held-out set (sessions present: {uniq})")
@@ -77,8 +80,8 @@ def split(y: np.ndarray, sessions: np.ndarray, test_session: int | None, seed: i
     tr, te = train_test_split(idx, test_size=0.25, stratify=y, random_state=seed)
     mtr, mte = np.zeros(len(y), bool), np.zeros(len(y), bool)
     mtr[tr], mte[te] = True, True
-    print("! only one session: using a random 25% split, which OVERSTATES accuracy. Record a second session.")
-    return mtr, mte, "random 25% split (single session)"
+    print("! random 25% split, which OVERSTATES accuracy (clips from the same session sit in train and test).")
+    return mtr, mte, "random 25% split"
 
 
 def save_confusion_png(cm: np.ndarray, labels: list[str], acc: float, path: Path) -> None:
@@ -115,14 +118,23 @@ def main() -> None:
     ap.add_argument("--vocab", nargs="*", help="only these labels (default: all; with learn clips use the 5 words + nothing)")
     ap.add_argument("--threshold", type=float, default=0.12, help="activity threshold for trimming (match ACTIVITY_THRESHOLD)")
     ap.add_argument("--conf", type=float, default=0.6, help="confidence threshold to report (match CONF_THRESHOLD)")
-    ap.add_argument("--trees", type=int, default=500)
+    ap.add_argument("--sessions", nargs="+", type=int, help="only use clips from these sessions")
+    ap.add_argument("--relabel", nargs="+", default=[], metavar="OLD=NEW", help="fix mislabeled clips without renaming files")
+    ap.add_argument("--random-split", action="store_true", help="stratified random 25%% test split instead of holding out a session")
+    ap.add_argument("--model", choices=["rf", "cnn"], default="rf", help="classifier to train")
+    ap.add_argument("--trees", type=int, default=500, help="random forest size")
+    ap.add_argument("--epochs", type=int, default=40, help="CNN training epochs")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
     vocab = {v.lower() for v in args.vocab} if args.vocab else None
     if vocab is None and "learn" in args.source:
         sys.exit("With --source learn, pass --vocab (e.g. --vocab help yes no Jordan water nothing)")
-    X, y, sessions = load_clips(args.clips, args.source, args.threshold, vocab)
+    relabel = {k.lower(): v for k, v in (r.split("=", 1) for r in args.relabel)}
+    X, y, sessions = load_clips(args.clips, args.source, args.threshold, vocab, relabel)
+    if args.sessions:
+        keep = np.isin(sessions, args.sessions)
+        X, y, sessions = X[keep], y[keep], sessions[keep]
     if len(y) == 0:
         sys.exit(f"no usable clips in {args.clips}")
     counts = Counter(y.tolist())
@@ -133,8 +145,11 @@ def main() -> None:
         if v < MIN_PER_CLASS:
             print(f"! '{k}' has only {v} clips; aim for {MIN_PER_CLASS}+ per session")
 
-    tr, te, how = split(y, sessions, args.test_session, args.seed)
-    model = SilentSpeechRF(args.trees, args.seed).fit(X[tr], y[tr])
+    def make():
+        return SilentSpeechCNN(args.epochs, args.seed) if args.model == "cnn" else SilentSpeechRF(args.trees, args.seed)
+
+    tr, te, how = split(y, sessions, args.test_session, args.seed, args.random_split)
+    model = make().fit(X[tr], y[tr])
     proba = model.predict_proba(X[te])
     pred = model.classes_[proba.argmax(1)]
     conf = proba.max(1)
@@ -158,14 +173,14 @@ def main() -> None:
     print(f"\nHeld-out accuracy {acc:.1%} on {int(te.sum())} clips")
     print(f"At confidence >= {args.conf}: {kept.mean():.0%} of words accepted, {acc_kept:.1%} of those correct")
 
-    final = SilentSpeechRF(args.trees, args.seed).fit(X, y)  # deploy on everything, report the held-out numbers
+    final = make().fit(X, y)  # deploy on everything, report the held-out numbers
     args.out.mkdir(parents=True, exist_ok=True)
     import joblib
 
     joblib.dump(final, args.out / "model.joblib")
     (args.out / "labels.json").write_text(json.dumps([str(c) for c in final.classes_]))
     metrics = {
-        "model": "random_forest",
+        "model": "cnn" if args.model == "cnn" else "random_forest",
         "evaluation": how,
         "accuracy": round(acc, 4),
         "n_train": int(tr.sum()),

@@ -9,5 +9,6 @@ asyncpg>=0.29
 # model loading (whatever the ML side trained the model with must be importable here)
 joblib>=1.4
 scikit-learn>=1.5
+torch>=2.2  # only needed when model.joblib is a CNN (python -m ml.train --model cnn)
 # Learn mode (local Whisper with word timestamps)
 faster-whisper>=1.0
