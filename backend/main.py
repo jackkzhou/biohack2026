@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.config import settings
+from backend.config import settings, VOCAB
 from backend.db import Database
 from backend.fake_stream import WORDS, FakeStream
 from backend.inference import GroundTruthClassifier, Inference, ModelClassifier, load_phrases
@@ -30,7 +30,6 @@ from backend.tts import TTS
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
 log = logging.getLogger("main")
 
-VOCAB = ["help", "yes", "no", "Jordan", "water"]
 SAMPLES_HZ = 25
 
 

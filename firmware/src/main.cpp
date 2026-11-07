@@ -6,7 +6,8 @@
 // Output, one line per sensor per sample (921600 baud):
 //   t_us,sensor,gx,gy,gz,ax,ay,az,qw,qx,qy,qz
 // gyro in rad/s, accel in m/s^2, t_us = ESP32 micros() when the sample was read.
-// The quaternion columns are always 0 (not used). Lines starting with '#' are
+// qw,qx,qy,qz is the BNO085's on-chip Game Rotation Vector (gyro+accel fusion, no
+// magnetometer), latest value at the time of the gyro sample; 0,0,0,0 until the first one arrives. Lines starting with '#' are
 // status messages and are ignored by the backend.
 //
 // Why not the SparkFun library: its SH2 driver is a singleton, so only one sensor
@@ -27,7 +28,7 @@ constexpr uint32_t STALL_MS = 1000;            // no samples for this long -> re
 constexpr size_t MAX_READ = 100;               // bytes per I2C transaction (Wire buffer is 128)
 
 constexpr uint8_t CH_EXEC = 1, CH_CONTROL = 2, CH_SENSOR = 3;
-constexpr uint8_t REPORT_ACCEL = 0x01, REPORT_GYRO = 0x02;
+constexpr uint8_t REPORT_ACCEL = 0x01, REPORT_GYRO = 0x02, REPORT_GAME_ROT = 0x08;
 constexpr uint8_t REPORT_BASE_TS = 0xFB, REPORT_TS_REBASE = 0xFA;
 
 SemaphoreHandle_t serialMux;
@@ -61,6 +62,7 @@ struct Bno {
   uint8_t seqOut[8] = {0};
   uint8_t payload[256];
   float a[3] = {0, 0, 0};
+  float q[4] = {0, 0, 0, 0};  // qw qx qy qz
   bool haveAccel = false;
   uint32_t lastSampleMs = 0;
   uint32_t lastTryMs = 0;
@@ -110,7 +112,7 @@ struct Bno {
     return sendPacket(CH_CONTROL, cmd, sizeof(cmd));
   }
 
-  bool enableReports() { return enableReport(REPORT_ACCEL) && enableReport(REPORT_GYRO); }
+  bool enableReports() { return enableReport(REPORT_ACCEL) && enableReport(REPORT_GYRO) && enableReport(REPORT_GAME_ROT); }
 
   void drain(uint32_t quietMs) {
     uint32_t quietSince = millis();
@@ -137,6 +139,7 @@ struct Bno {
       if (enableReports()) {
         up = true;
         haveAccel = false;
+        q[0] = q[1] = q[2] = q[3] = 0;
         lastSampleMs = millis();
         LOGF("# %s IMU ready at 0x%02X\n", name, addr);
         return true;
@@ -190,6 +193,14 @@ struct Bno {
           emit(tUs, x / 512.0f, y / 512.0f, z / 512.0f);            // Q9, rad/s
         }
         i += 10;
+      } else if (id == REPORT_GAME_ROT && i + 12 <= len) {
+        // Q14 unit quaternion, wire order i,j,k,real
+        float qi = (int16_t)(payload[i + 4] | payload[i + 5] << 8) / 16384.0f;
+        float qj = (int16_t)(payload[i + 6] | payload[i + 7] << 8) / 16384.0f;
+        float qk = (int16_t)(payload[i + 8] | payload[i + 9] << 8) / 16384.0f;
+        float qr = (int16_t)(payload[i + 10] | payload[i + 11] << 8) / 16384.0f;
+        q[0] = qr; q[1] = qi; q[2] = qj; q[3] = qk;
+        i += 12;
       } else {
         break;  // unknown report: skip the rest of this packet
       }
@@ -197,9 +208,9 @@ struct Bno {
   }
 
   void emit(uint32_t tUs, float gx, float gy, float gz) {
-    char line[128];
-    int n = snprintf(line, sizeof(line), "%lu,%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,0,0,0,0\n", (unsigned long)tUs, id, gx, gy,
-                     gz, a[0], a[1], a[2]);
+    char line[160];
+    int n = snprintf(line, sizeof(line), "%lu,%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,%.5f\n", (unsigned long)tUs, id, gx,
+                     gy, gz, a[0], a[1], a[2], q[0], q[1], q[2], q[3]);
     writeLine(line, n);
     lastSampleMs = millis();
   }

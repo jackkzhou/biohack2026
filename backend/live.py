@@ -28,6 +28,7 @@ from backend.reader import Reader
 
 
 USE_COLOR = sys.stdout.isatty()
+HEARTBEAT_S = 2.0  # while the jaw is still, print "(nothing detected)" this often
 
 
 def c(code: str, text: str) -> str:
@@ -76,7 +77,24 @@ async def run_fixed(reader: Reader, clf: VerboseClassifier, every: float, t0: fl
             print(c("2", f" · {stamp}  {label:<9} {bar} {conf:4.0%}  top: {runners_up(clf)}"))
 
 
-async def main(every: float | None = None) -> None:
+def meter_line(reader: Reader, inf: Inference) -> str:
+    """One live status line: board data rate, motion level vs the trigger threshold, and state."""
+    now = reader.latest_time()
+    if now is None:
+        return "no samples yet"
+    chin, head = reader.window_both(now - 0.15, now)
+    level = inf._activity(chin, head)
+    thr = inf.threshold
+    cells = 24
+    full = min(cells, round(level / (2 * thr) * cells))  # bar spans 0 .. 2x threshold
+    mark = cells // 2
+    bar = "".join(("█" if i < full else "░") if i != mark else ("┃" if i >= full else "█") for i in range(cells))
+    hz = reader.rates()
+    state = "RECORDING A WORD" if inf._seg_start is not None else ("moving" if level > thr else "still")
+    return f"data {hz[0]:.0f}/{hz[1]:.0f} Hz  motion {level:5.2f} {bar} (trigger {thr:.2f})  {state}    "
+
+
+async def main(every: float | None = None, meter: bool = False, show_phrase: bool = False) -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     base = ModelClassifier.load(settings.models_dir)
     classifier = VerboseClassifier(base.model, base.labels) if base else None
@@ -87,17 +105,22 @@ async def main(every: float | None = None) -> None:
     reader = Reader(settings.serial_port, settings.serial_baud, settings.fake_stream)
     t0 = time.monotonic()
 
+    last_print = [time.monotonic()]  # when anything was last printed (for the "still" heartbeat)
+
     def on_detection(_t: float, label: str, conf: float, accepted: bool) -> None:
         bar = "█" * round(conf * 10) + "░" * (10 - round(conf * 10))
         stamp = f"{time.monotonic() - t0:6.1f}s"
-        if accepted:
+        last_print[0] = time.monotonic()
+        if label == "nothing":  # the model says this movement is not a word
+            print(c("2", f" · {stamp}  (nothing detected)  [moved, but classified as 'nothing' {conf:.0%}]"))
+        elif accepted:
             print(c("1;32", f" ✓ {stamp}  {label:<9} {bar} {conf:4.0%}"))
         else:
             why = "idle" if label == "nothing" else "low confidence"
             print(c("2", f" · {stamp}  {label:<9} {bar} {conf:4.0%}  ({why})  top: {runners_up(classifier)}"))
 
     async def emit(msg: dict) -> None:
-        if msg["type"] == "phrase":
+        if show_phrase and msg["type"] == "phrase":  # the boxed phrase is off by default (--phrase turns it on)
             words = " + ".join(msg["words"])
             line = f"  {words}  →  {msg['sentence']}  "
             print("\n" + c("1;36", "┌" + "─" * len(line) + "┐"))
@@ -118,7 +141,14 @@ async def main(every: float | None = None) -> None:
     was = None
     try:
         while True:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.25 if meter else 0.5)
+            # A still jaw never reaches the classifier, so say so: one line every 2 s of silence.
+            if (reader.connected and inf._seg_start is None and not every
+                    and time.monotonic() - last_print[0] >= HEARTBEAT_S):
+                last_print[0] = time.monotonic()
+                print("\r\033[K" + c("2", f" · {time.monotonic() - t0:6.1f}s  (nothing detected)"))
+            if meter and reader.connected:
+                print("\r\033[K" + meter_line(reader, inf), end="", flush=True)
             if reader.connected != was:
                 was = reader.connected
                 print("sensors connected" if was else "waiting for sensors (check the cable / SERIAL_PORT)")
@@ -131,6 +161,9 @@ if __name__ == "__main__":
     try:
         ap = argparse.ArgumentParser()
         ap.add_argument("--every", type=float, help="classify a fixed window every N seconds instead of waiting for motion")
-        asyncio.run(main(ap.parse_args().every))
+        ap.add_argument("--meter", action="store_true", help="show a live motion meter (data rate, motion vs trigger)")
+        ap.add_argument("--phrase", action="store_true", help="also print the finished phrase in a box")
+        args = ap.parse_args()
+        asyncio.run(main(args.every, args.meter, args.phrase))
     except KeyboardInterrupt:
         pass

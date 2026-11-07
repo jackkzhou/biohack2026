@@ -14,6 +14,10 @@ BACKEND_DIR = Path(__file__).resolve().parent
 REPO_DIR = BACKEND_DIR.parent
 load_dotenv(BACKEND_DIR / ".env")
 
+# The fixed demo vocabulary: the only labels collection accepts and the model should know.
+VOCAB = ["help", "yes", "no", "Jordan", "water"]
+NOTHING = "nothing"  # "no word" class, recorded alongside VOCAB
+
 
 def _bool(name: str, default: bool) -> bool:
     v = os.getenv(name)
@@ -60,7 +64,8 @@ class Settings:
     )
     public_base_url: str = field(default_factory=lambda: _str("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/"))
     data_dir: Path = field(default_factory=lambda: Path(_str("DATA_DIR", str(REPO_DIR / "data"))))
-    models_dir: Path = BACKEND_DIR / "models"
+    # MODEL_DIR (absolute, or relative to the repo) lets you try another model without overwriting backend/models
+    models_dir: Path = field(default_factory=lambda: (REPO_DIR / _str("MODEL_DIR", "backend/models")))
 
 
 settings = Settings()
