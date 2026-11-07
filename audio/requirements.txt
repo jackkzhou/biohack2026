@@ -1,0 +1,4 @@
+elevenlabs>=1.9
+pydub>=0.25
+sounddevice>=0.4
+numpy>=1.26
