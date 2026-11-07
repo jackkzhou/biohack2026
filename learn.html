@@ -1,0 +1,84 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Mode 1 test: Learn</title>
+<style>
+  body { font: 16px system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  button { font-size: 18px; padding: 14px 28px; border-radius: 10px; border: 0; background: #2563eb; color: #fff; cursor: pointer; }
+  button.rec { background: #dc2626; }
+  #health, #clock { color: #555; margin: 8px 0; }
+  .utt { border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+  .word { display: inline-block; background: #eef2ff; border-radius: 6px; padding: 2px 8px; margin: 3px; }
+  .err { color: #b91c1c; }
+</style>
+</head>
+<body>
+<h1>Mode 1: Learn (test page)</h1>
+<p>Click <b>Start</b>, talk normally for a few seconds, click <b>Stop</b>. Whisper labels each word and the
+backend saves the matching jaw IMU window as a clip.</p>
+<div id="health">Checking backend…</div>
+<div id="clock"></div>
+<button id="btn">Start</button>
+<div id="log"></div>
+
+<script>
+const API = "http://localhost:8000";
+const btn = document.getElementById("btn");
+const log = document.getElementById("log");
+let stop = null;
+
+async function health() {
+  try {
+    const h = await (await fetch(API + "/health")).json();
+    document.getElementById("health").textContent =
+      `sensors: ${h.sensors ? "streaming" : "NOT streaming"} · database: ${h.database ? "online" : "offline (CSV only)"}`;
+  } catch {
+    document.getElementById("health").innerHTML = '<span class="err">Backend not reachable at ' + API + "</span>";
+  }
+}
+health(); setInterval(health, 3000);
+
+async function start() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: true } });
+  const rec = new MediaRecorder(stream);
+  const chunks = [];
+  let startedAt = 0;
+  rec.onstart = () => { startedAt = Date.now(); };          // laptop time when audio begins
+  rec.ondataavailable = (e) => chunks.push(e.data);
+  rec.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    const form = new FormData();
+    form.append("audio", new Blob(chunks, { type: rec.mimeType }), "utt.webm");
+    form.append("started_at_ms", String(startedAt));
+    const box = document.createElement("div");
+    box.className = "utt";
+    box.textContent = "Transcribing…";
+    log.prepend(box);
+    try {
+      const res = await fetch(API + "/learn/utterance", { method: "POST", body: form });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || res.status);
+      box.innerHTML = `<div><b>"${body.transcript || "(nothing heard)"}"</b></div>` +
+        (body.words.length
+          ? body.words.map((w) => `<span class="word">${w.word} · ${w.end_ms - w.start_ms} ms · clip ${w.clip_id}</span>`).join("")
+          : '<div class="err">No words saved: no speech heard, or no IMU data for that time.</div>');
+    } catch (e) {
+      box.innerHTML = `<span class="err">Failed: ${e.message}</span>`;
+    }
+  };
+  rec.start();
+  return () => rec.stop();
+}
+
+btn.onclick = async () => {
+  if (stop) { stop(); stop = null; btn.textContent = "Start"; btn.classList.remove("rec"); return; }
+  try { stop = await start(); btn.textContent = "Stop"; btn.classList.add("rec"); }
+  catch (e) { alert("Microphone error: " + e.message); }
+};
+
+document.getElementById("clock").textContent = "Browser clock now: " + new Date().toISOString() +
+  " (compare with `date -u` in the backend's terminal; they must match to the second)";
+</script>
+</body>
+</html>
