@@ -24,10 +24,10 @@ log = logging.getLogger("inference")
 
 TICK_S = 0.05
 ACT_WINDOW_S = 0.15
-WORD_END_GAP_S = 0.3
+WORD_END_GAP_S = 0.9  # your words have pauses up to ~0.7 s inside them (9% of training words exceed 0.8 s); must stay below PHRASE_PAUSE_S
 SEGMENT_PAD_S = 0.1
-MAX_WORD_S = 2.5
-MIN_WORD_S = 0.15
+MAX_WORD_S = 3.0  # training takes are 3 s
+MIN_WORD_S = 0.3
 NOTHING = "nothing"
 
 # Ordered key first, then order-insensitive key; unknown combinations get a generic sentence.
@@ -56,6 +56,13 @@ def activity_level(chin: np.ndarray, head: np.ndarray) -> float:
     return float(np.sqrt(np.mean(d**2)))
 
 
+def activity_level_invariant(chin: np.ndarray, head: np.ndarray) -> float:
+    """Orientation-free motion level: chin rotation speed minus head rotation speed (lengths only)."""
+    from ml.preprocess import activity_level_invariant as f
+
+    return f(chin, head)
+
+
 class Classifier(Protocol):
     def classify(self, chin: np.ndarray, head: np.ndarray) -> tuple[str, float]: ...
 
@@ -70,6 +77,18 @@ class ModelClassifier:
 
     def __init__(self, model: Any, labels: list[str]) -> None:
         self.model, self.labels = model, labels
+        # Which ml.preprocess pipeline the model was trained with (older models: raw axes).
+        self.preprocess_name = getattr(model, "preprocess", "default")
+
+    @property
+    def orientation_free(self) -> bool:
+        return self.preprocess_name == "orientation-free"
+
+    def window(self, chin: np.ndarray, head: np.ndarray):
+        """Raw rows of both sensors -> model input, exactly as the model was trained."""
+        from ml.preprocess import get_preprocessor
+
+        return get_preprocessor(self.preprocess_name)(chin, head)
 
     @classmethod
     def load(cls, models_dir) -> "ModelClassifier | None":
@@ -87,9 +106,7 @@ class ModelClassifier:
         return cls(model, labels)
 
     def classify(self, chin: np.ndarray, head: np.ndarray) -> tuple[str, float]:
-        from ml.preprocess import preprocess_window
-
-        x = preprocess_window(chin, head)
+        x = self.window(chin, head)
         if x is None:
             return NOTHING, 0.0
         try:
@@ -158,6 +175,8 @@ class Inference:
         self.base_threshold = self.threshold = activity_threshold
         self.on_detection = on_detection
         self.mode = "lookup"
+        # a model trained without orientation also gets orientation-free motion detection
+        self._activity = activity_level_invariant if getattr(classifier, "orientation_free", False) else activity_level
         self._words: list[str] = []
         self._seg_start: float | None = None
         self._last_active = 0.0
@@ -194,7 +213,7 @@ class Inference:
         if now is None or not self.reader.connected:
             return  # no live data: freeze the state machine rather than invent stillness
         chin, head = self.reader.window_both(now - ACT_WINDOW_S, now)
-        active = activity_level(chin, head) > self.threshold
+        active = self._activity(chin, head) > self.threshold
 
         if active:
             self._last_active = now
