@@ -24,7 +24,7 @@ from backend.reader import Reader
 from backend.recorder import Recorder, RecorderError, Transcriber
 
 TAKE_SECONDS = 3.0  # every take is exactly this long
-MIN_HZ = 150  # warn below this per-sensor rate (target is 200)
+MIN_HZ = 75  # warn below this per-sensor rate (target is 100)
 
 
 async def ask(prompt: str) -> str:

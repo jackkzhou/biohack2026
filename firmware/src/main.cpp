@@ -1,4 +1,4 @@
-// Two BNO085 IMUs streaming accelerometer + gyroscope at 200 Hz each.
+// Two BNO085 IMUs streaming accelerometer + gyroscope at 100 Hz each.
 //
 //   sensor 0 = jaw  (chin)  on Wire1: SDA D18, SCL D19
 //   sensor 1 = head (still) on Wire : SDA D21, SCL D22
@@ -19,13 +19,39 @@
 constexpr int JAW_SDA = 18, JAW_SCL = 19;
 constexpr int HEAD_SDA = 21, HEAD_SCL = 22;
 constexpr int LED_PIN = 2;
-constexpr uint32_t REPORT_INTERVAL_US = 5000;  // 200 Hz
+constexpr uint32_t JAW_CLOCK_HZ = 400000;
+// The head sensor is on longer wires: at 400 kHz it dropped packets and reset itself, 100 kHz is stable.
+constexpr uint32_t HEAD_CLOCK_HZ = 100000;
+constexpr uint32_t REPORT_INTERVAL_US = 10000;  // 100 Hz
 constexpr uint32_t STALL_MS = 1000;            // no samples for this long -> re-initialise the sensor
 constexpr size_t MAX_READ = 100;               // bytes per I2C transaction (Wire buffer is 128)
 
 constexpr uint8_t CH_EXEC = 1, CH_CONTROL = 2, CH_SENSOR = 3;
 constexpr uint8_t REPORT_ACCEL = 0x01, REPORT_GYRO = 0x02;
 constexpr uint8_t REPORT_BASE_TS = 0xFB, REPORT_TS_REBASE = 0xFA;
+
+SemaphoreHandle_t serialMux;
+// Only one I2C transaction at a time across both buses: with both buses switching at once
+// the head sensor (long wires) dropped packets and reset itself.
+SemaphoreHandle_t i2cMux;
+struct I2cLock {
+  I2cLock() { xSemaphoreTake(i2cMux, portMAX_DELAY); }
+  ~I2cLock() { xSemaphoreGive(i2cMux); }
+};
+
+// One line at a time on the UART, from either sensor task.
+static void writeLine(const char *line, size_t n) {
+  xSemaphoreTake(serialMux, portMAX_DELAY);
+  Serial.write((const uint8_t *)line, n);
+  xSemaphoreGive(serialMux);
+}
+
+#define LOGF(...)                                \
+  do {                                           \
+    char m_[96];                                 \
+    int n_ = snprintf(m_, sizeof(m_), __VA_ARGS__); \
+    writeLine(m_, n_);                           \
+  } while (0)
 
 struct Bno {
   const char *name;
@@ -38,10 +64,11 @@ struct Bno {
   bool haveAccel = false;
   uint32_t lastSampleMs = 0;
   uint32_t lastTryMs = 0;
-  bool up = false;
+  volatile bool up = false;
 
   // ---- low level ---------------------------------------------------------
   bool sendPacket(uint8_t channel, const uint8_t *data, uint16_t len) {
+    I2cLock lock;
     uint16_t total = len + 4;
     bus->beginTransmission(addr);
     bus->write((uint8_t)(total & 0xFF));
@@ -55,6 +82,7 @@ struct Bno {
   // Reads one SHTP packet. Returns payload length (0 = nothing waiting).
   // The payload is stored in `payload` (truncated if oversized; the rest is drained).
   int readPacket(uint8_t &channel) {
+    I2cLock lock;
     if (bus->requestFrom((uint16_t)addr, (uint8_t)4) != 4) return 0;
     uint8_t h0 = bus->read(), h1 = bus->read(), h2 = bus->read();
     bus->read();
@@ -110,11 +138,11 @@ struct Bno {
         up = true;
         haveAccel = false;
         lastSampleMs = millis();
-        Serial.printf("# %s IMU ready at 0x%02X\n", name, addr);
+        LOGF("# %s IMU ready at 0x%02X\n", name, addr);
         return true;
       }
     }
-    Serial.printf("# %s IMU not found\n", name);
+    LOGF("# %s IMU not found\n", name);
     return false;
   }
 
@@ -122,7 +150,7 @@ struct Bno {
   // Returns true if anything was read.
   bool poll() {
     if (!up) {
-      if (millis() - lastTryMs > 2000) begin();
+      if (millis() - lastTryMs > 1000) begin();
       return false;
     }
     bool any = false;
@@ -139,7 +167,7 @@ struct Bno {
       }
     }
     if (millis() - lastSampleMs > STALL_MS) {
-      Serial.printf("# %s IMU stalled, re-initialising\n", name);
+      LOGF("# %s IMU stalled, re-initialising\n", name);
       begin();
     }
     return any;
@@ -172,7 +200,7 @@ struct Bno {
     char line[128];
     int n = snprintf(line, sizeof(line), "%lu,%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,0,0,0,0\n", (unsigned long)tUs, id, gx, gy,
                      gz, a[0], a[1], a[2]);
-    Serial.write((const uint8_t *)line, n);
+    writeLine(line, n);
     lastSampleMs = millis();
   }
 };
@@ -180,24 +208,34 @@ struct Bno {
 Bno jaw{"jaw", 0, &Wire1};
 Bno head{"head", 1, &Wire};
 
+// Each sensor has its own I2C bus, so each gets its own task (and core): a slow or
+// restarting sensor can no longer delay the other one.
+static void sensorTask(void *arg) {
+  Bno *b = (Bno *)arg;
+  b->begin();
+  for (;;) {
+    if (!b->poll()) vTaskDelay(1);  // nothing waiting: yield (also feeds the watchdog)
+  }
+}
+
 void setup() {
-  Serial.setTxBufferSize(8192);  // 2 x 200 lines/s must never block on the UART
+  Serial.setTxBufferSize(8192);  // 2 x 100 lines/s must never block on the UART
   Serial.begin(921600);
+  serialMux = xSemaphoreCreateMutex();
+  i2cMux = xSemaphoreCreateMutex();
   pinMode(LED_PIN, OUTPUT);
   Wire1.begin(JAW_SDA, JAW_SCL);
-  Wire1.setClock(400000);
+  Wire1.setClock(JAW_CLOCK_HZ);
   Wire1.setBufferSize(128);
   Wire.begin(HEAD_SDA, HEAD_SCL);
-  Wire.setClock(400000);
+  Wire.setClock(HEAD_CLOCK_HZ);
   Wire.setBufferSize(128);
   delay(500);
-  jaw.begin();
-  head.begin();
+  xTaskCreatePinnedToCore(sensorTask, "jaw", 6144, &jaw, 2, nullptr, 0);
+  xTaskCreatePinnedToCore(sensorTask, "head", 6144, &head, 2, nullptr, 1);
 }
 
 void loop() {
-  bool a = jaw.poll();
-  bool b = head.poll();
   digitalWrite(LED_PIN, jaw.up && head.up ? HIGH : LOW);
-  if (!a && !b) delayMicroseconds(300);
+  delay(100);
 }
