@@ -62,10 +62,12 @@ class TTS:
 
     @property
     def enabled(self) -> bool:
+        """Ready to actually speak (needs a voice, not just an API key)."""
         return bool(self.api_key and self.voice_id)
 
     async def start(self) -> None:
-        if self.enabled:
+        # Only the API key is needed to list voices; speak() separately requires voice_id too.
+        if self.api_key:
             self._client = httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=30.0))
         else:
             log.info("ElevenLabs not configured: phrases will be shown but not spoken")
@@ -76,6 +78,25 @@ class TTS:
 
     def get(self, job_id: int) -> TTSJob | None:
         return self._jobs.get(job_id)
+
+    def set_voice(self, voice_id: str) -> None:
+        """Switch which ElevenLabs voice future speak() calls use."""
+        self.voice_id = voice_id
+        log.info("voice set to %s", voice_id)
+
+    async def list_voices(self) -> list[dict[str, str]] | None:
+        """[{voice_id, name}, ...] from ElevenLabs, or None if not configured / the request failed."""
+        if not (self.api_key and self._client):
+            return None
+        try:
+            res = await self._client.get("https://api.elevenlabs.io/v1/voices", headers={"xi-api-key": self.api_key})
+            if res.status_code != 200:
+                log.warning("could not list ElevenLabs voices: HTTP %d", res.status_code)
+                return None
+            return [{"voice_id": v["voice_id"], "name": v["name"]} for v in res.json().get("voices", [])]
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not list ElevenLabs voices: %s", e)
+            return None
 
     def speak(self, text: str) -> TTSJob | None:
         """Begin streaming `text`; returns the job immediately (None if TTS is off)."""

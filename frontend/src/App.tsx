@@ -3,6 +3,7 @@ import LiveStreamProvider from './api/LiveStreamProvider';
 import ConnectionStatus from './components/ConnectionStatus';
 import TareButton from './components/TareButton';
 import Calibrate from './pages/Calibrate';
+import VoiceSelect from './components/VoiceSelect';
 import Learn from './pages/Learn';
 import SilentSpeech from './pages/SilentSpeech';
 
@@ -40,6 +41,7 @@ export default function App() {
           <div className="flex items-center justify-center gap-4 px-4 pt-3">
             <ConnectionStatus />
             <TareButton />
+            <VoiceSelect />
           </div>
           <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 pb-28 sm:px-6">
             <Routes>
