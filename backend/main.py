@@ -217,6 +217,14 @@ async def learn_utterance(audio: UploadFile = File(...), started_at_ms: float = 
     return await recorder.learn_utterance(await audio.read(), suffix, started_at_ms)
 
 
+@app.get("/clips")
+async def list_clips() -> list[dict]:
+    rows = await db.list_clips()
+    if rows is None:
+        raise HTTPException(503, "database is not connected")
+    return rows
+
+
 @app.get("/clips/{clip_id}")
 async def get_clip(clip_id: int) -> dict:
     return await recorder.get_clip(clip_id)

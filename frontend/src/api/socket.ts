@@ -22,6 +22,10 @@ interface State {
   phrase: { words: string[]; sentence: string } | null;
   /** increments each time a phrase completes (pages use it to refetch history) */
   phraseCount: number;
+  /** a movement was detected but it was not a word (and no words are showing) */
+  nothing: boolean;
+  /** increments on every such event */
+  nothingCount: number;
   speaking: boolean;
   muted: boolean;
 }
@@ -31,6 +35,7 @@ type Action =
   | { type: 'streaming'; streaming: boolean }
   | { type: 'status'; connected: boolean; rate_hz: number[]; dropped: number }
   | { type: 'word'; word: DetectedWord }
+  | { type: 'nothing' }
   | { type: 'pause'; progress: number }
   | { type: 'phrase'; words: string[]; sentence: string }
   | { type: 'speaking'; active: boolean }
@@ -45,6 +50,8 @@ const initial: State = {
   pauseProgress: 0,
   phrase: null,
   phraseCount: 0,
+  nothing: false,
+  nothingCount: 0,
   speaking: false,
   muted: false,
 };
@@ -62,8 +69,10 @@ function reducer(s: State, a: Action): State {
     case 'word': {
       // A new word after a finished phrase starts a fresh phrase.
       const base = s.phrase ? [] : s.currentWords;
-      return { ...s, currentWords: [...base, a.word], phrase: null, pauseProgress: 0 };
+      return { ...s, currentWords: [...base, a.word], phrase: null, pauseProgress: 0, nothing: false };
     }
+    case 'nothing':
+      return { ...s, nothingCount: s.nothingCount + 1, nothing: s.currentWords.length === 0 && !s.phrase };
     case 'pause':
       return { ...s, pauseProgress: a.progress };
     case 'phrase':
@@ -71,7 +80,7 @@ function reducer(s: State, a: Action): State {
     case 'speaking':
       return { ...s, speaking: a.active };
     case 'clear':
-      return { ...s, currentWords: [], phrase: null, pauseProgress: 0 };
+      return { ...s, currentWords: [], phrase: null, pauseProgress: 0, nothing: false };
     case 'muted':
       return { ...s, muted: a.muted };
   }
@@ -121,6 +130,9 @@ export function useLiveSocket(): LiveStream {
           break;
         case 'word':
           dispatch({ type: 'word', word: { id: ++wordId.current, word: m.word, confidence: m.confidence } });
+          break;
+        case 'nothing':
+          dispatch({ type: 'nothing' });
           break;
         case 'pause':
           dispatch({ type: 'pause', progress: m.progress });

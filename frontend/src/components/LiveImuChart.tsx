@@ -153,7 +153,7 @@ function Trace({
 
   return (
     <div>
-      <div className="mb-1 text-sm font-semibold text-muted">{label}</div>
+      <div className="text-xs font-semibold text-muted">{label}</div>
       <div ref={host} className="w-full" role="img" aria-label={`${label} sensor, last ${WINDOW_S} seconds`} />
     </div>
   );
@@ -164,35 +164,19 @@ export default function LiveImuChart({ height = 130 }: { height?: number }) {
   const [channel, setChannel] = useState<Channel>('gyro');
   const { link, streaming } = useLiveStream();
 
-  const swatch = (color: string, name: string) => (
-    <span className="inline-flex items-center gap-1.5 text-sm text-muted">
-      <span aria-hidden className="h-1 w-5 rounded" style={{ background: color }} />
-      {name}
-    </span>
-  );
-
   return (
-    <section className="card" aria-label="Live IMU signals">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-4">
-          <h2 className="text-lg font-semibold">Live sensors</h2>
-          {swatch(colors.accent, 'x')}
-          {swatch(colors.s2, 'y')}
-          {swatch(colors.s3, 'z')}
-          <span className="text-sm text-muted">{channel === 'gyro' ? 'rad/s' : 'm/s²'} · last {WINDOW_S} s</span>
-        </div>
-        <div className="flex gap-2" role="group" aria-label="Signal">
-          {(['gyro', 'accel'] as const).map((c) => (
-            <button key={c} className={`btn !min-h-[2.5rem] !px-4 ${channel === c ? 'btn-active' : ''}`} aria-pressed={channel === c} onClick={() => setChannel(c)}>
-              {c === 'gyro' ? 'Gyro' : 'Accel'}
-            </button>
-          ))}
-        </div>
+    <section className="card !p-3" aria-label="Live IMU signals">
+      <div className="mb-1 flex justify-end gap-1" role="group" aria-label="Signal">
+        {(['gyro', 'accel'] as const).map((c) => (
+          <button key={c} className={`btn !min-h-[1.75rem] !px-3 !py-0 !text-xs ${channel === c ? 'btn-active' : ''}`} aria-pressed={channel === c} onClick={() => setChannel(c)}>
+            {c === 'gyro' ? 'Gyro' : 'Accel'}
+          </button>
+        ))}
       </div>
       {link === 'open' && !streaming && (
-        <p className="mb-2 text-sm font-medium text-warn">No samples arriving. Check that the sensors are powered and connected.</p>
+        <p className="mb-2 text-sm font-medium text-warn">No samples.</p>
       )}
-      <div className="grid gap-3">
+      <div className="grid gap-1">
         <Trace sensor={0} label="Chin" channel={channel} height={height} colors={colors} />
         <Trace sensor={1} label="Head" channel={channel} height={height} colors={colors} />
       </div>

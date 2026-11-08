@@ -23,6 +23,7 @@ const realApi: Api = {
     form.append('started_at_ms', String(startedAtMs));
     return http('/learn/utterance', { method: 'POST', body: form });
   },
+  listClips: () => http('/clips'),
   getClip: (id) => http(`/clips/${id}`),
   deleteClip: (id) => http(`/clips/${id}`, { method: 'DELETE' }),
   recordRestPose: (session) => http('/record/rest-pose', json('POST', { session })),

@@ -53,6 +53,11 @@ export const mockApi: Api = {
     return { transcript, words };
   },
 
+  async listClips() {
+    await delay();
+    return [...clips.values()].map((c) => ({ id: c.id, label: c.word, session: 1, source: c.source, n_samples: c.samples.length, created_at_ms: Date.now() }));
+  },
+
   async getClip(id) {
     await delay();
     const c = clips.get(id);

@@ -188,6 +188,19 @@ class Database:
 
         return await self._read(go)
 
+    async def list_clips(self, limit: int = 2000) -> list[dict] | None:
+        """Metadata of stored clips, newest first (no samples)."""
+        async def go(con: Any) -> list[dict]:
+            recs = await con.fetch(
+                "SELECT id, label, session, source, n_samples, created_at FROM clips ORDER BY id DESC LIMIT $1", limit)
+            return [
+                {"id": int(r["id"]), "label": r["label"], "session": r["session"], "source": r["source"],
+                 "n_samples": r["n_samples"], "created_at_ms": int(r["created_at"].timestamp() * 1000)}
+                for r in recs
+            ]
+
+        return await self._read(go)
+
     async def history(self, limit: int = 50) -> list[dict] | None:
         async def go(con: Any) -> list[dict]:
             recs = await con.fetch("SELECT id, at, words, sentence FROM phrases ORDER BY at DESC LIMIT $1", limit)

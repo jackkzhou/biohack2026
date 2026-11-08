@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
-import PipelineDiagram from '../components/PipelineDiagram';
 import Sparkline from '../components/Sparkline';
-import { USE_MOCK } from '../config';
 import { useUtteranceRecorder, type MicState } from '../hooks/useUtteranceRecorder';
-import type { Clip, UtteranceResult } from '../types';
+import type { Clip, ClipInfo, UtteranceResult } from '../types';
 
 interface Item {
   key: number;
@@ -31,7 +29,7 @@ function WordRow({ word, startMs, endMs, clipId, base }: { word: string; startMs
       </span>
       {clip ? <Sparkline samples={clip.samples} /> : <span className="flex h-9 w-[150px] items-center justify-center rounded bg-surface-2 text-xs text-muted">{failed ? 'No preview' : 'Loading…'}</span>}
       <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-ok">
-        <span aria-hidden>✓</span> Saved to Tiger Data <span className="font-normal text-muted">(clip #{clipId})</span>
+        <span aria-hidden>✓</span> Saved
       </span>
     </li>
   );
@@ -71,29 +69,17 @@ function Demo() {
   }, [items]);
 
   return (
-    <section className="card" aria-labelledby="demo-h">
-      <div className="flex flex-wrap items-center gap-3">
-        <h2 id="demo-h" className="h-section">
-          Try it: live auto-labelling
-        </h2>
-        <span className="badge">Proof of concept</span>
-      </div>
-      <p className="mt-2 text-muted">
-        Speak normally. After each pause the audio is sent to the backend, transcribed, and matched to the sensor data from the same moment. This panel is a live
-        proof of concept: <strong className="text-ink">Mode 2’s model is not trained on this data.</strong>
-        {USE_MOCK && ' (Demo mode: your audio is recorded, but the transcript below is simulated.)'}
-      </p>
-
-      <div className="mt-5 flex flex-wrap items-center gap-4">
+    <section className="card" aria-label="Train">
+      <div className="flex flex-wrap items-center gap-4">
         <button className={`btn min-h-[3.75rem] px-8 text-xl ${listening ? '' : 'btn-primary'}`} onClick={listening ? stop : start} disabled={state === 'requesting'}>
-          {state === 'requesting' ? 'Waiting for microphone…' : listening ? '■ Stop listening' : '● Start listening'}
+          {state === 'requesting' ? 'Starting…' : listening ? '■ Stop listening' : '● Start listening'}
         </button>
         {listening && (
           <div className="flex items-center gap-3" aria-live="polite">
             <div className="h-3 w-40 overflow-hidden rounded-full bg-border" aria-hidden>
               <div className="h-full rounded-full bg-accent transition-[width] duration-75" style={{ width: `${level * 100}%` }} />
             </div>
-            <span className={`text-sm font-semibold ${hearing ? 'text-accent' : 'text-muted'}`}>{hearing ? 'Hearing speech…' : 'Listening…'}</span>
+            <span className={`text-sm font-semibold ${hearing ? 'text-accent' : 'text-muted'}`}>{hearing ? 'Hearing…' : 'Listening…'}</span>
           </div>
         )}
       </div>
@@ -107,17 +93,16 @@ function Demo() {
         <div>
           {items.length === 0 ? (
             <p className="rounded-xl border border-dashed border-border p-6 text-center text-muted">
-              Nothing yet. Press <strong>Start listening</strong> and say something like “water please”.
+              Press Start and say something.
             </p>
           ) : (
             <ul className="space-y-4">
               {items.map((it) => (
                 <li key={it.key} className="pop-in rounded-xl border border-border bg-surface-2 p-4">
-                  {it.status === 'pending' && <p className="font-medium text-muted">Transcribing and labelling…</p>}
+                  {it.status === 'pending' && <p className="font-medium text-muted">Working…</p>}
                   {it.status === 'error' && <p className="font-medium text-danger">Couldn’t label this utterance: {it.error}</p>}
                   {it.status === 'done' && it.result && (
                     <>
-                      <p className="text-sm font-semibold uppercase tracking-wide text-muted">Transcript</p>
                       <p className="text-2xl font-bold">“{it.result.transcript}”</p>
                       <ul className="mt-2 divide-y divide-border">
                         {it.result.words.map((w) => (
@@ -133,7 +118,7 @@ function Demo() {
         </div>
 
         <aside aria-label="Session counts" className="h-fit rounded-xl border border-border bg-surface-2 p-4">
-          <p className="text-sm font-semibold uppercase tracking-wide text-muted">Auto-labelled clips this session</p>
+          <p className="text-sm font-semibold uppercase tracking-wide text-muted">Clips</p>
           <p className="text-5xl font-bold tabular-nums text-accent">{total}</p>
           {perWord.length > 0 ? (
             <table className="mt-3 w-full text-left">
@@ -152,39 +137,100 @@ function Demo() {
                 ))}
               </tbody>
             </table>
-          ) : (
-            <p className="mt-2 text-sm text-muted">Per-word counts appear here.</p>
-          )}
+          ) : null}
         </aside>
       </div>
     </section>
   );
 }
 
+function ClipThumb({ info }: { info: ClipInfo }) {
+  const [clip, setClip] = useState<Clip | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.getClip(info.id).then((c) => live && setClip(c)).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [info.id]);
+  return (
+    <li className="flex items-center justify-between gap-3 py-2">
+      <span className="text-sm tabular-nums text-muted">#{info.id}</span>
+      {clip ? <Sparkline samples={clip.samples} /> : <span className="h-9 w-[150px] rounded bg-surface-2" />}
+      <span className="w-14 text-right text-sm tabular-nums text-muted">{info.session != null ? `S${info.session}` : ''}</span>
+    </li>
+  );
+}
+
+function Library() {
+  const [clips, setClips] = useState<ClipInfo[] | null>(null);
+  const [error, setError] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    let timer: number | undefined;
+    const load = () =>
+      api
+        .listClips()
+        .then((c) => live && (setClips(c), setError(false)))
+        .catch(() => {
+          if (!live) return;
+          setError(true);
+          timer = window.setTimeout(load, 3000); // keep trying until the database is up
+        });
+    void load();
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, []);
+
+  const groups = useMemo(() => {
+    const m = new Map<string, ClipInfo[]>();
+    for (const c of clips ?? []) m.set(c.label, [...(m.get(c.label) ?? []), c]);
+    return [...m.entries()].sort((a, b) => b[1].length - a[1].length);
+  }, [clips]);
+
+  return (
+    <section className="card" aria-label="Clips">
+      {error ? (
+        <p className="text-danger">Can’t reach the database. Retrying…</p>
+      ) : clips === null ? (
+        <p className="text-muted">Loading…</p>
+      ) : groups.length === 0 ? (
+        <p className="text-muted">No clips.</p>
+      ) : (
+        <>
+          <div className="mb-3 flex items-baseline gap-3">
+            <span className="text-5xl font-bold tabular-nums text-accent">{clips.length}</span>
+            <span className="text-sm font-semibold uppercase tracking-wide text-muted">clips</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {groups.map(([label, items]) => (
+              <button key={label} className={`btn !min-h-[2.5rem] ${open === label ? 'btn-active' : ''}`} aria-pressed={open === label} onClick={() => setOpen(open === label ? null : label)}>
+                {label} <span className="ml-1 tabular-nums text-muted">{items.length}</span>
+              </button>
+            ))}
+          </div>
+          {open && (
+            <ul className="mt-3 divide-y divide-border">
+              {(groups.find(([l]) => l === open)?.[1] ?? []).slice(0, 12).map((c) => (
+                <ClipThumb key={c.id} info={c} />
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 export default function Learn() {
   return (
-    <div className="space-y-10">
-      <header className="max-w-3xl">
-        <span className="badge">Mode 1</span>
-        <h1 className="h-page mt-2">Learn</h1>
-        <p className="mt-4 text-xl">
-          While Alex can still speak, a microphone writes down what he says and works out exactly <em>when</em> each word was spoken. The sensor data from that same
-          moment is cut out and saved with the word as its label.
-        </p>
-        <p className="mt-3 text-lg text-muted">
-          So his personal dataset builds itself during ordinary days, with no dedicated training sessions. The same recordings quietly bank his voice for the clone that
-          will speak for him later.
-        </p>
-      </header>
-
+    <div className="space-y-6">
       <Demo />
-
-      <section aria-labelledby="pipeline-h">
-        <h2 id="pipeline-h" className="h-section mb-4">
-          How it fits together over time
-        </h2>
-        <PipelineDiagram />
-      </section>
+      <Library />
     </div>
   );
 }

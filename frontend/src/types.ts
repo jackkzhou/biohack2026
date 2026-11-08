@@ -12,6 +12,7 @@ export interface ImuSample {
 export type ServerMessage =
   | { type: 'samples'; data: ImuSample[] }
   | { type: 'word'; word: string; confidence: number }
+  | { type: 'nothing' }
   | { type: 'pause'; progress: number }
   | { type: 'phrase'; words: string[]; sentence: string }
   | { type: 'speaking'; active: boolean }
@@ -35,6 +36,15 @@ export interface Clip {
   samples: ImuSample[];
 }
 
+export interface ClipInfo {
+  id: number;
+  label: string;
+  session: number | null;
+  source: string;
+  n_samples: number | null;
+  created_at_ms: number;
+}
+
 export interface PhraseRecord {
   id: number;
   words: string[];
@@ -56,6 +66,7 @@ export type PhrasingMode = 'lookup' | 'llm';
 
 export interface Api {
   postUtterance(audio: Blob, startedAtMs: number): Promise<UtteranceResult>;
+  listClips(): Promise<ClipInfo[]>;
   getClip(id: number): Promise<Clip>;
   deleteClip(id: number): Promise<void>;
   recordRestPose(session: number): Promise<void>;

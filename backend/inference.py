@@ -245,6 +245,7 @@ class Inference:
             self.on_detection(end, label, conf, accepted)
         if not accepted:
             log.debug("ignored %s (%.2f)", label, conf)
+            await self.emit({"type": "nothing"})  # lets the UI say "nothing detected"
             return
         self._words.append(label)
         await self.emit({"type": "word", "word": label, "confidence": round(conf, 2)})

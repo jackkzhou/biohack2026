@@ -11,6 +11,7 @@ export default function PhraseBanner({
   muted: boolean;
   large?: boolean;
 }) {
+  if (!sentence && !words.length) return null;
   return (
     <section className="card text-center" aria-live="polite" aria-label="Spoken sentence">
       {sentence ? (
@@ -36,7 +37,7 @@ export default function PhraseBanner({
         </>
       ) : (
         <p className={`font-medium text-muted ${large ? 'text-2xl' : 'text-xl'}`}>
-          {words.length ? `Building phrase: ${words.join(' + ')} …` : 'Silently mouth a word to begin.'}
+          Building phrase: {words.join(' + ')} …
         </p>
       )}
     </section>
