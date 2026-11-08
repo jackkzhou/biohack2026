@@ -153,19 +153,31 @@ function ClipThumb({ info }: { info: ClipInfo }) {
       live = false;
     };
   }, [info.id]);
+  const word = info.label.toLowerCase();
   return (
-    <li className="flex items-center justify-between gap-3 py-2">
+    <li className="flex flex-wrap items-center justify-between gap-3 py-2">
       <span className="text-sm tabular-nums text-muted">#{info.id}</span>
       {clip ? <Sparkline samples={clip.samples} /> : <span className="h-9 w-[150px] rounded bg-surface-2" />}
+      {/* placeholder recording per word (frontend/public/audio); swap in the clip's banked audio later */}
+      {PLACEHOLDER_AUDIO.has(word) ? (
+        <audio controls preload="none" src={`/audio/${word}.wav`} className="h-9 w-56 max-w-full" aria-label={`Voice for ${info.label}`} />
+      ) : (
+        <span className="w-56 text-sm text-muted">No audio</span>
+      )}
       <span className="w-14 text-right text-sm tabular-nums text-muted">{info.session != null ? `S${info.session}` : ''}</span>
     </li>
   );
 }
 
+const PAGE_SIZE = 10;
+
+const PLACEHOLDER_AUDIO = new Set(['jordan', 'help', 'no', 'water', 'yes', 'nothing']);
+
 function Library() {
   const [clips, setClips] = useState<ClipInfo[] | null>(null);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -208,18 +220,38 @@ function Library() {
           </div>
           <div className="flex flex-wrap gap-2">
             {groups.map(([label, items]) => (
-              <button key={label} className={`btn !min-h-[2.5rem] ${open === label ? 'btn-active' : ''}`} aria-pressed={open === label} onClick={() => setOpen(open === label ? null : label)}>
+              <button key={label} className={`btn !min-h-[2.5rem] ${open === label ? 'btn-active' : ''}`} aria-pressed={open === label} onClick={() => (setOpen(open === label ? null : label), setPage(0))}>
                 {label} <span className="ml-1 tabular-nums text-muted">{items.length}</span>
               </button>
             ))}
           </div>
-          {open && (
-            <ul className="mt-3 divide-y divide-border">
-              {(groups.find(([l]) => l === open)?.[1] ?? []).slice(0, 12).map((c) => (
-                <ClipThumb key={c.id} info={c} />
-              ))}
-            </ul>
-          )}
+          {open && (() => {
+            const all = groups.find(([l]) => l === open)?.[1] ?? [];
+            const pages = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
+            const p = Math.min(page, pages - 1);
+            return (
+              <>
+                <ul className="mt-3 max-h-[28rem] divide-y divide-border overflow-y-auto pr-1">
+                  {all.slice(p * PAGE_SIZE, (p + 1) * PAGE_SIZE).map((c) => (
+                    <ClipThumb key={c.id} info={c} />
+                  ))}
+                </ul>
+                {pages > 1 && (
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <button className="btn !min-h-[2.5rem]" disabled={p === 0} onClick={() => setPage(p - 1)}>
+                      ← Prev
+                    </button>
+                    <span className="text-sm tabular-nums text-muted">
+                      Page {p + 1} of {pages} · {all.length} clips
+                    </span>
+                    <button className="btn !min-h-[2.5rem]" disabled={p >= pages - 1} onClick={() => setPage(p + 1)}>
+                      Next →
+                    </button>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </>
       )}
     </section>

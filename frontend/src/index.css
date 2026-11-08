@@ -16,25 +16,7 @@
   --danger: 185 28 28;
   --s2: 194 100 0;
   --s3: 109 40 217;
-  color-scheme: light dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: 11 18 21;
-    --surface: 18 28 32;
-    --surface-2: 26 40 45;
-    --border: 42 59 65;
-    --ink: 232 240 242;
-    --muted: 150 169 176;
-    --accent: 94 205 208;
-    --accent-ink: 4 28 30;
-    --ok: 74 222 128;
-    --warn: 251 191 36;
-    --danger: 248 113 113;
-    --s2: 251 191 36;
-    --s3: 167 139 250;
-  }
+  color-scheme: light;
 }
 
 @layer base {

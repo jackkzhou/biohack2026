@@ -59,8 +59,25 @@ class Transcriber:
             self._model = WhisperModel(self.model_name, compute_type="int8")
         return self._model
 
+    @staticmethod
+    def _decode(path: str) -> np.ndarray:
+        """16 kHz mono float32, decoded with PyAV directly: faster-whisper's own decode_audio passes
+        metadata_errors= to av.open(), which av>=13 removed (and av<13 has no Python 3.14 wheels)."""
+        import av
+
+        out = []
+        with av.open(path) as container:
+            resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+            for frame in container.decode(audio=0):
+                for f in resampler.resample(frame):
+                    out.append(f.to_ndarray().reshape(-1))
+            for f in resampler.resample(None):  # flush
+                out.append(f.to_ndarray().reshape(-1))
+        return (np.concatenate(out).astype(np.float32) / 32768.0) if out else np.zeros(0, np.float32)
+
     def _run(self, path: str) -> tuple[str, list[tuple[str, float, float]]]:
-        segments, _ = self._load().transcribe(path, word_timestamps=True, language=self.language or None, vad_filter=True)
+        segments, _ = self._load().transcribe(self._decode(path), word_timestamps=True,
+                                              language=self.language or None, vad_filter=True)
         text, words = [], []
         for seg in segments:
             text.append(seg.text.strip())
