@@ -4,7 +4,16 @@ import type { Api } from '../types';
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(API_URL + path, init);
-  if (!res.ok) throw new Error(`${init?.method ?? 'GET'} ${path} failed (${res.status})`);
+  if (!res.ok) {
+    const text = await res.text();
+    let detail: string | undefined;
+    try {
+      detail = JSON.parse(text)?.detail;
+    } catch {
+      /* body wasn't JSON */
+    }
+    throw new Error(detail || `${init?.method ?? 'GET'} ${path} failed (${res.status})`);
+  }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   return (text ? JSON.parse(text) : undefined) as T;
@@ -43,6 +52,9 @@ const realApi: Api = {
   listVoices: () => http('/voice/list'),
   selectVoice: (voiceId) => http('/voice/select', json('POST', { voice_id: voiceId })),
   getMetrics: () => http('/model/metrics'),
+  getProgressionStatus: () => http('/progression/status'),
+  getProgressionWindow: () => http('/progression/window'),
+  getProgressionPrediction: (force) => http(`/progression/predict${force ? '?force=true' : ''}`),
 };
 
 export const api: Api = USE_MOCK ? mockApi : realApi;

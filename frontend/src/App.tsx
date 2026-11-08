@@ -5,6 +5,7 @@ import TareButton from './components/TareButton';
 import Calibrate from './pages/Calibrate';
 import VoiceSelect from './components/VoiceSelect';
 import Learn from './pages/Learn';
+import Progression from './pages/Progression';
 import SilentSpeech from './pages/SilentSpeech';
 
 const icon = 'h-6 w-6';
@@ -19,6 +20,11 @@ const WaveIcon = () => (
     <path d="M4 12v0M8 8v8M12 4v16M16 8v8M20 12v0" />
   </svg>
 );
+const TrendIcon = () => (
+  <svg className={icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M4 15l5-6 4 3 7-9M14 4h6v6" />
+  </svg>
+);
 
 const TuneIcon = () => (
   <svg className={icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -31,6 +37,7 @@ const tabs = [
   ['/learn', 'Train', MicIcon],
   ['/calibrate', 'Calibrate', TuneIcon],
   ['/silent-speech', 'Speech', WaveIcon],
+  ['/progression', 'Trends', TrendIcon],
 ] as const;
 
 export default function App() {
@@ -48,6 +55,7 @@ export default function App() {
               <Route path="/learn" element={<Learn />} />
               <Route path="/calibrate" element={<Calibrate />} />
               <Route path="/silent-speech" element={<SilentSpeech />} />
+              <Route path="/progression" element={<Progression />} />
               <Route path="*" element={<Navigate to="/learn" replace />} />
             </Routes>
           </main>

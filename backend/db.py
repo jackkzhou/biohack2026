@@ -15,7 +15,7 @@ import json
 import logging
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Awaitable, Callable
 
 import numpy as np
@@ -27,6 +27,7 @@ SAMPLE_BATCH = 5000
 SAMPLE_QUEUE_MAX = 60_000  # ~5 min of both sensors at 100 Hz
 OPS_MAX = 2000
 READ_TIMEOUT_S = 2.0
+BATCH_READ_TIMEOUT_S = 30.0  # once-daily aggregation reads, not latency-sensitive UI reads
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS imu_samples (
@@ -61,6 +62,12 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS rest_poses (
         session integer NOT NULL, at timestamptz NOT NULL DEFAULT now(),
         chin double precision[], head double precision[], activity_rms double precision)""",
+    """CREATE TABLE IF NOT EXISTS daily_features (
+        day date PRIMARY KEY, computed_at timestamptz NOT NULL DEFAULT now(),
+        n_clips integer NOT NULL, n_detections integer NOT NULL, features jsonb NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS progression_predictions (
+        target_day date PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now(),
+        window_start date NOT NULL, window_end date NOT NULL, response jsonb NOT NULL)""",
 ]
 
 # Same columns as the firmware line: t_us,sensor,gx,gy,gz,ax,ay,az,qw,qx,qy,qz.
@@ -163,13 +170,19 @@ class Database:
         """One row per tare attempt (successful or not); `tare_id` is the record's ms timestamp."""
         self._op("tare", tare_id, rec)
 
+    def save_daily_features(self, day: date, n_clips: int, n_detections: int, features: dict) -> None:
+        self._op("daily_features", day, n_clips, n_detections, features)
+
+    def save_progression_prediction(self, target_day: date, window_start: date, window_end: date, response: dict) -> None:
+        self._op("prediction", target_day, window_start, window_end, response)
+
     # ---- read API (None = database unavailable) --------------------------
-    async def _read(self, fn: Callable[[Any], Awaitable[Any]]) -> Any:
+    async def _read(self, fn: Callable[[Any], Awaitable[Any]], timeout: float = READ_TIMEOUT_S) -> Any:
         if not (self.online and self._pool):
             return None
         try:
             async with self._pool.acquire() as con:
-                return await asyncio.wait_for(fn(con), READ_TIMEOUT_S)
+                return await asyncio.wait_for(fn(con), timeout)
         except Exception as e:  # noqa: BLE001
             log.warning("db read failed: %s", e)
             return None
@@ -219,6 +232,86 @@ class Database:
                 {"id": int(r["id"]), "words": list(r["words"]), "sentence": r["sentence"], "at_ms": int(r["at"].timestamp() * 1000)}
                 for r in recs
             ]
+
+        return await self._read(go)
+
+    async def clips_with_samples_for_day(self, day: date) -> list[tuple[dict, np.ndarray]] | None:
+        """Every clip recorded on `day` (UTC) with its full chin+head sample rows, for feature extraction.
+
+        One round trip for the day's clip samples (not one per clip) -- a busy day can have
+        hundreds of clips, and fetching each clip's samples separately blew past READ_TIMEOUT_S.
+        This is a once-daily batch read, not a latency-sensitive UI read, so it gets a longer budget."""
+        async def go(con: Any) -> list[tuple[dict, np.ndarray]]:
+            clip_rows = await con.fetch(
+                "SELECT id, label, session, source, n_samples FROM clips WHERE t_start >= $1::date AND t_start < $1::date + 1",
+                day,
+            )
+            if not clip_rows:
+                return []
+            sample_rows = await con.fetch(
+                "SELECT clip_id, time, t_us, gx, gy, gz, ax, ay, az, sensor, qw, qx, qy, qz "
+                "FROM clip_samples WHERE clip_id = ANY($1::bigint[]) ORDER BY clip_id, time",
+                [c["id"] for c in clip_rows],
+            )
+            by_clip: dict[int, list[list[float]]] = {}
+            for r in sample_rows:
+                by_clip.setdefault(r["clip_id"], []).append(
+                    [r["time"].timestamp(), r["t_us"] / 1e6, r["gx"], r["gy"], r["gz"], r["ax"], r["ay"], r["az"],
+                     r["qw"] or 0, r["qx"] or 0, r["qy"] or 0, r["qz"] or 0, r["sensor"]]
+                )
+            return [
+                (dict(c), np.array(by_clip.get(c["id"], []), dtype=np.float64).reshape(-1, 13))
+                for c in clip_rows
+            ]
+
+        return await self._read(go, timeout=BATCH_READ_TIMEOUT_S)
+
+    async def detections_for_day(self, day: date) -> list[dict] | None:
+        async def go(con: Any) -> list[dict]:
+            recs = await con.fetch(
+                "SELECT time, word, confidence, accepted FROM detections WHERE time >= $1::date AND time < $1::date + 1 ORDER BY time",
+                day,
+            )
+            return [{"at_ms": int(r["time"].timestamp() * 1000), "word": r["word"],
+                      "confidence": float(r["confidence"]), "accepted": r["accepted"]} for r in recs]
+
+        return await self._read(go)
+
+    async def rest_poses_for_day(self, day: date) -> list[dict] | None:
+        async def go(con: Any) -> list[dict]:
+            recs = await con.fetch(
+                "SELECT activity_rms FROM rest_poses WHERE at >= $1::date AND at < $1::date + 1 AND activity_rms IS NOT NULL",
+                day,
+            )
+            return [{"activity_rms": float(r["activity_rms"])} for r in recs]
+
+        return await self._read(go)
+
+    async def daily_features_window(self, end_day: date, days: int) -> list[dict] | None:
+        """Up to `days` rows of daily_features ending on `end_day` (inclusive), oldest first."""
+        async def go(con: Any) -> list[dict]:
+            recs = await con.fetch(
+                "SELECT day, n_clips, n_detections, features FROM daily_features "
+                "WHERE day > $1::date - $2::integer AND day <= $1::date ORDER BY day ASC",
+                end_day, days,
+            )
+            return [{"day": r["day"], "n_clips": r["n_clips"], "n_detections": r["n_detections"],
+                      "features": json.loads(r["features"])} for r in recs]
+
+        return await self._read(go)
+
+    async def get_progression_prediction(self, target_day: date) -> dict | None:
+        async def go(con: Any) -> dict | None:
+            r = await con.fetchrow(
+                "SELECT target_day, created_at, window_start, window_end, response FROM progression_predictions WHERE target_day=$1",
+                target_day,
+            )
+            if not r:
+                return None
+            return {"target_day": r["target_day"], "created_at_ms": int(r["created_at"].timestamp() * 1000),
+                    "window_start": r["window_start"], "window_end": r["window_end"], "response": json.loads(r["response"])}
+
+        return await self._read(go)
 
         return await self._read(go)
 
@@ -339,3 +432,17 @@ class Database:
         elif kind == "rest":
             _, session, chin, head, rms = op
             await con.execute("INSERT INTO rest_poses (session, chin, head, activity_rms) VALUES ($1,$2,$3,$4)", session, chin, head, rms)
+        elif kind == "daily_features":
+            _, day, n_clips, n_detections, features = op
+            await con.execute(
+                "INSERT INTO daily_features (day, n_clips, n_detections, features) VALUES ($1,$2,$3,$4) "
+                "ON CONFLICT (day) DO UPDATE SET computed_at=now(), n_clips=$2, n_detections=$3, features=$4",
+                day, n_clips, n_detections, json.dumps(features),
+            )
+        elif kind == "prediction":
+            _, target_day, window_start, window_end, response = op
+            await con.execute(
+                "INSERT INTO progression_predictions (target_day, window_start, window_end, response) VALUES ($1,$2,$3,$4) "
+                "ON CONFLICT (target_day) DO UPDATE SET created_at=now(), window_start=$2, window_end=$3, response=$4",
+                target_day, window_start, window_end, json.dumps(response),
+            )

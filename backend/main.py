@@ -11,6 +11,7 @@ import logging
 import random
 import time
 from contextlib import asynccontextmanager
+from datetime import date, timedelta, timezone, datetime as dt
 from pathlib import Path
 from typing import Literal
 
@@ -24,6 +25,7 @@ from backend.config import NOTHING, VOCAB, settings
 from backend.db import Database
 from backend.fake_stream import WORDS, FakeStream
 from backend.inference import GroundTruthClassifier, Inference, ModelClassifier, load_phrases
+from backend.progression import Progression, ProgressionError, daily_close_task
 from backend.reader import Reader
 from backend.recorder import Recorder, RecorderError, Transcriber
 from backend.tts import TTS
@@ -71,6 +73,8 @@ recorder = Recorder(reader, db, settings.data_dir, Transcriber(settings.whisper_
                     settings.learn_pad_ms, settings.learn_audio_offset_ms, calibrator)
 calib = Calibration(settings.data_dir / "clips", settings.data_dir / "tares", settings.models_dir / "calibrated",
                     list(settings.calib_words), settings.calib_takes, settings.calib_weight, [*VOCAB, NOTHING])
+progression = Progression(db, settings.gemini_api_key, settings.gemini_model, settings.gemini_timeout_s,
+                           settings.gemini_max_retries, settings.gemini_max_calls_per_hour, settings.baseline_days)
 inference: Inference  # built in lifespan (needs the running loop for its callbacks)
 
 
@@ -154,7 +158,7 @@ async def lifespan(app: FastAPI):
             fake.burst(random.choice(WORDS) if nothing else label, delay=0.3, duration=1.0, intensity=0.35 if nothing else 1.0)
         recorder.on_record_start = on_start
 
-    tasks = [asyncio.create_task(c) for c in (inference.run(), sample_pump(), status_pump())]
+    tasks = [asyncio.create_task(c) for c in (inference.run(), sample_pump(), status_pump(), daily_close_task(progression))]
     if fake:
         tasks.append(asyncio.create_task(fake.run()))
     log.info("backend ready (fake=%s, db=%s, tts=%s, model=%s)", bool(fake), db.enabled, tts.enabled, inference.model_loaded)
@@ -181,6 +185,13 @@ async def calibration_error(_, e: CalibrationError):
 
 @app.exception_handler(RecorderError)
 async def recorder_error(_, e: RecorderError):
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse({"detail": str(e)}, status_code=e.status)
+
+
+@app.exception_handler(ProgressionError)
+async def progression_error(_, e: ProgressionError):
     from fastapi.responses import JSONResponse
 
     return JSONResponse({"detail": str(e)}, status_code=e.status)
@@ -227,7 +238,7 @@ class ModeBody(BaseModel):
 async def health() -> dict:
     """Booleans only: no secrets, no configuration values."""
     return {"sensors": reader.connected, "fake_stream": bool(fake), "database": db.online, "speech": tts.enabled,
-            "model": inference.model_loaded}
+            "model": inference.model_loaded, "progression": progression.client.enabled}
 
 
 @app.post("/learn/utterance")
@@ -394,6 +405,36 @@ async def model_metrics() -> dict:
     if not p.exists():
         raise HTTPException(404, "no metrics.json in backend/models/ yet")
     return json.loads(p.read_text())
+
+
+class CloseDayBody(BaseModel):
+    day: str | None = None  # YYYY-MM-DD; omit to close out "yesterday" (UTC)
+
+
+@app.get("/progression/status")
+async def progression_status() -> dict:
+    """How many consecutive days of IMU features are banked, and whether the 14-day baseline is met."""
+    return (await progression.status()).model_dump(mode="json")
+
+
+@app.get("/progression/window")
+async def progression_window() -> list[dict]:
+    """Daily feature summaries banked so far (up to 14), for charting the trend behind a prediction."""
+    return await progression.window()
+
+
+@app.post("/progression/close-day")
+async def progression_close_day(body: CloseDayBody | None = None) -> dict:
+    """Compute and store a day's feature summary. Runs automatically at UTC midnight; this is for backfills/demos."""
+    raw = body.day if body else None
+    day = date.fromisoformat(raw) if raw else dt.now(timezone.utc).date() - timedelta(days=1)
+    return await progression.close_day(day)
+
+
+@app.get("/progression/predict")
+async def progression_predict(force: bool = False) -> dict:
+    """Gemini's next-day deterioration prediction from the last 14 days. 409 until the baseline is complete."""
+    return await progression.predict(force=force)
 
 
 @app.get("/tts/{job_id}.mp3")

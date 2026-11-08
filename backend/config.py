@@ -47,6 +47,13 @@ class Settings:
     elevenlabs_voice_id: str = field(default_factory=lambda: _str("ELEVENLABS_VOICE_ID"), repr=False)
     elevenlabs_model: str = field(default_factory=lambda: _str("ELEVENLABS_MODEL", "eleven_flash_v2_5"))
     store_raw_stream: bool = field(default_factory=lambda: _bool("STORE_RAW_STREAM", True))
+    # progression (Gemini-powered deterioration prediction)
+    gemini_api_key: str = field(default_factory=lambda: _str("GEMINI_API_KEY"), repr=False)
+    gemini_model: str = field(default_factory=lambda: _str("GEMINI_MODEL", "gemini-3.7-flash"))
+    gemini_timeout_s: float = field(default_factory=lambda: _float("GEMINI_TIMEOUT_S", 90))
+    gemini_max_retries: int = field(default_factory=lambda: int(_float("GEMINI_MAX_RETRIES", 3)))
+    gemini_max_calls_per_hour: int = field(default_factory=lambda: int(_float("GEMINI_MAX_CALLS_PER_HOUR", 6)))
+    baseline_days: int = field(default_factory=lambda: int(_float("BASELINE_DAYS", 14)))
     # learn mode
     whisper_model: str = field(default_factory=lambda: _str("WHISPER_MODEL", "base.en"))
     whisper_language: str = field(default_factory=lambda: _str("WHISPER_LANGUAGE", "en"))

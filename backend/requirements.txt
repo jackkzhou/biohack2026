@@ -13,3 +13,5 @@ torch>=2.2  # only needed when model.joblib is a CNN (python -m ml.train --model
 # Learn mode (local Whisper with word timestamps)
 faster-whisper>=1.0
 av<13  # faster-whisper's decode_audio passes metadata_errors= to av.open(), removed in av>=13
+# Progression prediction (Gemini)
+google-genai>=1.0
