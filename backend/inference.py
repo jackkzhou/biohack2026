@@ -189,6 +189,14 @@ class Inference:
     def model_loaded(self) -> bool:
         return self.classifier is not None
 
+    def set_classifier(self, classifier: "Classifier | None") -> "Classifier | None":
+        """Swap the model while running (e.g. after on-site calibration); returns the one it replaced.
+        Motion detection follows the new model's preprocessing (orientation-free models use the invariant measure)."""
+        previous = self.classifier
+        self.classifier = classifier
+        self._activity = activity_level_invariant if getattr(classifier, "orientation_free", False) else activity_level
+        return previous
+
     def calibrate(self, rest_rms: float) -> None:
         """Set the motion threshold from a rest-pose recording (never below the configured default)."""
         # capped at 3x the default so a rest pose taken while moving cannot switch detection off

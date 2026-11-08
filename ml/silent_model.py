@@ -43,8 +43,8 @@ class SilentSpeechRF:
     def classes_(self) -> np.ndarray:
         return self.rf.classes_
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "SilentSpeechRF":
-        self.rf.fit(features(X), y)
+    def fit(self, X: np.ndarray, y: np.ndarray, sample_weight: np.ndarray | None = None) -> "SilentSpeechRF":
+        self.rf.fit(features(X), y, sample_weight=sample_weight)
         return self
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:

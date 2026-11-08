@@ -19,7 +19,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.config import settings, VOCAB
+from backend.calibrate import Calibration, CalibrationError
+from backend.config import NOTHING, VOCAB, settings
 from backend.db import Database
 from backend.fake_stream import WORDS, FakeStream
 from backend.inference import GroundTruthClassifier, Inference, ModelClassifier, load_phrases
@@ -68,6 +69,8 @@ fake = FakeStream(reader) if settings.fake_stream else None
 calibrator = TareCalibrator()
 recorder = Recorder(reader, db, settings.data_dir, Transcriber(settings.whisper_model, settings.whisper_language), VOCAB,
                     settings.learn_pad_ms, settings.learn_audio_offset_ms, calibrator)
+calib = Calibration(settings.data_dir / "clips", settings.data_dir / "tares", settings.models_dir / "calibrated",
+                    list(settings.calib_words), settings.calib_takes, settings.calib_weight, [*VOCAB, NOTHING])
 inference: Inference  # built in lifespan (needs the running loop for its callbacks)
 
 
@@ -167,6 +170,13 @@ app = FastAPI(title="Silent Speech", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"])
 
 
+@app.exception_handler(CalibrationError)
+async def calibration_error(_, e: CalibrationError):
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse({"detail": str(e)}, status_code=e.status)
+
+
 @app.exception_handler(RecorderError)
 async def recorder_error(_, e: RecorderError):
     from fastapi.responses import JSONResponse
@@ -236,6 +246,47 @@ async def get_clip(clip_id: int) -> dict:
 @app.delete("/clips/{clip_id}", status_code=204)
 async def delete_clip(clip_id: int) -> Response:
     recorder.delete_clip(clip_id)
+    return Response(status_code=204)
+
+
+class TrainBody(BaseModel):
+    session: int | None = None
+
+
+class BeginBody(BaseModel):
+    words: list[str] | None = None
+    takes: int | None = None
+    keep_session: bool = False  # True = continue the current calibration (same session, tare unchanged)
+
+
+@app.get("/calibrate/info")
+async def calibrate_info() -> dict:
+    return calib.info(calibrator.enabled, inference)
+
+
+@app.post("/calibrate/begin")
+async def calibrate_begin(body: BeginBody) -> dict:
+    if not calibrator.enabled:
+        raise HTTPException(409, "tare first: hold still in a neutral pose and press Tare")
+    out = calib.begin(body.words, body.takes, body.keep_session)
+    recorder.adopt_tare(out["session"])  # so this session's clips count as tared dataset from now on
+    return out
+
+
+@app.post("/calibrate/train")
+async def calibrate_train(body: TrainBody) -> dict:
+    return await calib.train(inference, body.session)
+
+
+@app.post("/calibrate/reset", status_code=204)
+async def calibrate_reset() -> Response:
+    calib.reset(inference)
+    return Response(status_code=204)
+
+
+@app.post("/calibrate/undo", status_code=204)
+async def calibrate_undo() -> Response:
+    calib.undo(inference)
     return Response(status_code=204)
 
 

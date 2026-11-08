@@ -37,6 +37,9 @@ const METRICS: ModelMetrics = {
   ],
 };
 
+let mockCalibrated = false;
+let mockCounts: Record<string, number> = {};
+
 export const mockApi: Api = {
   async postUtterance(_audio, startedAtMs): Promise<UtteranceResult> {
     await sleep(jitter(500, 1100));
@@ -70,6 +73,32 @@ export const mockApi: Api = {
     const c = clips.get(id);
     if (c?.source === 'record') counts[c.word] = Math.max(0, (counts[c.word] ?? 0) - 1);
     clips.delete(id);
+  },
+
+  async calibrateInfo() {
+    return { words: ['help', 'Jordan', 'no', 'nothing'], allowed: ['help', 'yes', 'no', 'Jordan', 'water', 'nothing'], counts: { ...mockCounts }, takes_per_word: 3, seconds: 3, tared: true, model_loaded: true, calibrated: mockCalibrated, session: Object.keys(mockCounts).length ? 7 : null, can_undo: mockCalibrated };
+  },
+
+  async calibrateBegin({ words, takes, keepSession }) {
+    if (!keepSession) mockCounts = {};
+    const order = words.flatMap((w) => Array.from({ length: takes }, () => w)).sort(() => Math.random() - 0.5);
+    for (const w of order) mockCounts[w] = (mockCounts[w] ?? 0) + 1;
+    return { session: 7, order };
+  },
+
+  async calibrateTrain() {
+    await sleep(2000);
+    mockCalibrated = true;
+    return { ok: true, new_takes: { ...mockCounts } };
+  },
+
+  async calibrateUndo() {
+    mockCalibrated = false;
+  },
+
+  async calibrateReset() {
+    mockCalibrated = false;
+    mockCounts = {};
   },
 
   async tare() {

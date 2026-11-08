@@ -45,6 +45,19 @@ export interface ClipInfo {
   created_at_ms: number;
 }
 
+export interface CalibrateInfo {
+  words: string[];
+  allowed: string[];
+  counts: Record<string, number>;
+  takes_per_word: number;
+  seconds: number;
+  tared: boolean;
+  model_loaded: boolean;
+  calibrated: boolean;
+  session: number | null;
+  can_undo: boolean;
+}
+
 export interface PhraseRecord {
   id: number;
   words: string[];
@@ -70,6 +83,11 @@ export interface Api {
   getClip(id: number): Promise<Clip>;
   deleteClip(id: number): Promise<void>;
   tare(): Promise<void>;
+  calibrateInfo(): Promise<CalibrateInfo>;
+  calibrateBegin(opts: { words: string[]; takes: number; keepSession: boolean }): Promise<{ session: number; order: string[] }>;
+  calibrateTrain(session: number): Promise<{ ok: boolean; new_takes: Record<string, number> }>;
+  calibrateUndo(): Promise<void>;
+  calibrateReset(): Promise<void>;
   recordRestPose(session: number): Promise<void>;
   recordStart(label: string, session: number): Promise<void>;
   recordStop(): Promise<{ clip_id: number; label: string }>;

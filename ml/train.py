@@ -120,6 +120,8 @@ def main() -> None:
     ap.add_argument("--threshold", type=float, default=0.12, help="activity threshold for trimming (match ACTIVITY_THRESHOLD)")
     ap.add_argument("--conf", type=float, default=0.6, help="confidence threshold to report (match CONF_THRESHOLD)")
     ap.add_argument("--sessions", nargs="+", type=int, help="only use clips from these sessions")
+    ap.add_argument("--tared-only", action="store_true",
+                    help="use only sessions that have a successful tare record (data/tares), i.e. the tared dataset incl. calibration sessions")
     ap.add_argument("--relabel", nargs="+", default=[], metavar="OLD=NEW", help="fix mislabeled clips without renaming files")
     ap.add_argument("--random-split", action="store_true", help="stratified random 25%% test split instead of holding out a session")
     ap.add_argument("--features", choices=["default", "orientation-free"], default="default",
@@ -137,6 +139,13 @@ def main() -> None:
     X, y, sessions = load_clips(args.clips, args.source, args.threshold, vocab, relabel, args.features)
     if args.sessions:
         keep = np.isin(sessions, args.sessions)
+        X, y, sessions = X[keep], y[keep], sessions[keep]
+    if args.tared_only:
+        from ml.tare import tared_sessions
+
+        good = sorted(tared_sessions(args.clips.parent / "tares"))
+        print(f"tared sessions: {good}")
+        keep = np.isin(sessions, good)
         X, y, sessions = X[keep], y[keep], sessions[keep]
     if len(y) == 0:
         sys.exit(f"no usable clips in {args.clips}")

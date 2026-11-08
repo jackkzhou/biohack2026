@@ -11,6 +11,7 @@ Nothing here can block or break live inference:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections import deque
@@ -51,6 +52,12 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS detections (
         time timestamptz NOT NULL, word text NOT NULL, confidence real NOT NULL, accepted boolean NOT NULL)""",
     "SELECT create_hypertable('detections', 'time', if_not_exists => TRUE)",
+    """CREATE TABLE IF NOT EXISTS tares (
+        id bigint PRIMARY KEY, session integer, at timestamptz, ok boolean NOT NULL, error text,
+        rotation_angle_deg double precision, rotation jsonb,
+        q_jaw double precision[], q_head double precision[],
+        gravity_chin double precision[], gravity_head double precision[],
+        n_chin integer, n_head integer)""",
     """CREATE TABLE IF NOT EXISTS rest_poses (
         session integer NOT NULL, at timestamptz NOT NULL DEFAULT now(),
         chin double precision[], head double precision[], activity_rms double precision)""",
@@ -151,6 +158,10 @@ class Database:
 
     def save_rest_pose(self, session: int, chin: list[float], head: list[float], rms: float) -> None:
         self._op("rest", session, chin, head, rms)
+
+    def save_tare(self, tare_id: int, rec: dict) -> None:
+        """One row per tare attempt (successful or not); `tare_id` is the record's ms timestamp."""
+        self._op("tare", tare_id, rec)
 
     # ---- read API (None = database unavailable) --------------------------
     async def _read(self, fn: Callable[[Any], Awaitable[Any]]) -> Any:
@@ -306,6 +317,16 @@ class Database:
         elif kind == "detection":
             _, t, word, conf, accepted = op
             await con.execute("INSERT INTO detections (time, word, confidence, accepted) VALUES ($1,$2,$3,$4)", _ts(t), word, conf, accepted)
+        elif kind == "tare":
+            _, tid, r = op
+            await con.execute(
+                "INSERT INTO tares (id, session, at, ok, error, rotation_angle_deg, rotation, q_jaw, q_head, "
+                "gravity_chin, gravity_head, n_chin, n_head) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13) "
+                "ON CONFLICT (id) DO NOTHING",
+                tid, r.get("session"), datetime.strptime(r["at"], "%Y-%m-%dT%H:%M:%S%z"), bool(r["ok"]), r.get("error"),
+                r.get("rotation_angle_deg"), json.dumps(r["rotation"]) if r.get("rotation") else None,
+                r.get("q_jaw"), r.get("q_head"), r.get("gravity_chin"), r.get("gravity_head"), r.get("n_chin"), r.get("n_head"),
+            )
         elif kind == "rest":
             _, session, chin, head, rms = op
             await con.execute("INSERT INTO rest_poses (session, chin, head, activity_rms) VALUES ($1,$2,$3,$4)", session, chin, head, rms)

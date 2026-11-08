@@ -57,6 +57,23 @@ def _average_quaternion(quats: np.ndarray) -> np.ndarray:
     return mean / norm
 
 
+def tared_sessions(tares_dir) -> set[int]:
+    """Sessions with at least one successful tare record (data/tares/*.json). Clips from older sessions have
+    untared chin axes (and zero quaternions), so they do not match tared live data."""
+    import json
+    from pathlib import Path
+
+    out: set[int] = set()
+    for p in Path(tares_dir).glob("*_tare_s*.json"):
+        try:
+            j = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if j.get("ok") and isinstance(j.get("session"), int):
+            out.add(j["session"])
+    return out
+
+
 class TareCalibrator:
     """Holds the jaw-to-head rotation offset for one session.
 

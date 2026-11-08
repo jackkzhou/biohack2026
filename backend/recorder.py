@@ -146,6 +146,20 @@ class Recorder:
         finally:
             self._write_tare_record(record)
 
+    def adopt_tare(self, session: int) -> bool:
+        """Record that the tare currently in effect applies to `session` (used when a calibration session
+        starts), so its clips count as tared data in later training. No-op if the session already has one."""
+        from ml.tare import tared_sessions
+
+        if not self.calibrator.enabled:
+            raise RecorderError("no tare in effect: tare first", 409)
+        if session in tared_sessions(self.clip_dir.parent / "tares"):
+            return False
+        record = {"session": session, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "ok": True, "error": None,
+                  "inherited": True, **self.calibrator.info}
+        self._write_tare_record(record)
+        return True
+
     def _write_tare_record(self, record: dict) -> None:
         try:
             import json
@@ -153,7 +167,9 @@ class Recorder:
             d = self.clip_dir.parent / "tares"
             d.mkdir(parents=True, exist_ok=True)
             tag = "x" if record["session"] is None else str(record["session"])
-            (d / f"{int(time.time() * 1000)}_tare_s{tag}.json").write_text(json.dumps(record, indent=2))
+            tid = int(time.time() * 1000)
+            (d / f"{tid}_tare_s{tag}.json").write_text(json.dumps(record, indent=2))
+            self.db.save_tare(tid, record)
         except Exception:  # noqa: BLE001  (never let bookkeeping break recording)
             log.exception("could not write the tare record")
 

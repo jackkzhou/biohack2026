@@ -56,6 +56,12 @@ class Settings:
     conf_threshold: float = field(default_factory=lambda: _float("CONF_THRESHOLD", 0.6))
     phrase_pause_s: float = field(default_factory=lambda: _float("PHRASE_PAUSE_S", 1.5))
     activity_threshold: float = field(default_factory=lambda: _float("ACTIVITY_THRESHOLD", 0.12))
+    # on-site calibration (Calibrate tab)
+    calib_words: tuple[str, ...] = field(
+        default_factory=lambda: tuple(w.strip() for w in _str("CALIB_WORDS", "help,Jordan,no,nothing").split(",") if w.strip())
+    )
+    calib_takes: int = field(default_factory=lambda: int(_float("CALIB_TAKES", 10)))
+    calib_weight: float = field(default_factory=lambda: _float("CALIB_WEIGHT", 5))
     # server
     cors_origins: tuple[str, ...] = field(
         default_factory=lambda: tuple(

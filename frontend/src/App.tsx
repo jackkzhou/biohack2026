@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, NavLink, Route, Routes } from 'react-router-do
 import LiveStreamProvider from './api/LiveStreamProvider';
 import ConnectionStatus from './components/ConnectionStatus';
 import TareButton from './components/TareButton';
+import Calibrate from './pages/Calibrate';
 import Learn from './pages/Learn';
 import SilentSpeech from './pages/SilentSpeech';
 
@@ -18,8 +19,16 @@ const WaveIcon = () => (
   </svg>
 );
 
+const TuneIcon = () => (
+  <svg className={icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <circle cx="12" cy="12" r="8" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
 const tabs = [
   ['/learn', 'Train', MicIcon],
+  ['/calibrate', 'Calibrate', TuneIcon],
   ['/silent-speech', 'Speech', WaveIcon],
 ] as const;
 
@@ -35,6 +44,7 @@ export default function App() {
           <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 pb-28 sm:px-6">
             <Routes>
               <Route path="/learn" element={<Learn />} />
+              <Route path="/calibrate" element={<Calibrate />} />
               <Route path="/silent-speech" element={<SilentSpeech />} />
               <Route path="*" element={<Navigate to="/learn" replace />} />
             </Routes>

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import re
 import sys
@@ -39,6 +40,23 @@ def next_session(recorder: Recorder) -> int:
     return max(nums, default=0) + 1
 
 
+def print_counts(recorder: Recorder, current: int) -> None:
+    """Takes saved so far, per session and per word (read from the CSVs, which are always written first)."""
+    by_session: dict[int, dict[str, int]] = {}
+    for p in recorder.clip_dir.glob("*_record_*_s*.csv"):
+        m = re.match(r"\d+_record_(.*)_s(-?\d+)\.csv$", p.name)
+        if m:
+            words = by_session.setdefault(int(m[2]), {})
+            words[m[1]] = words.get(m[1], 0) + 1
+    by_session.setdefault(current, {})
+    print("Saved so far (takes per word):")
+    for sess in sorted(by_session):
+        words = by_session[sess]
+        body = ", ".join(f"{k}={v}" for k, v in sorted(words.items())) or "none yet"
+        mark = "  <- this session" if sess == current else ""
+        print(f"  S{sess}: {body}  [total {sum(words.values())}]{mark}")
+
+
 async def upload_backlog(db: Database, recorder: Recorder) -> None:
     files = sorted(recorder.clip_dir.glob("*.csv"))
     queued = 0
@@ -53,6 +71,14 @@ async def upload_backlog(db: Database, recorder: Recorder) -> None:
                       "t_start": float(rows[0, 0]), "t_end": float(rows[-1, 0])}, rows)
         queued += 1
     print(f"queued {queued} clip file(s); clips already in the database are skipped")
+    tares = 0
+    for p in sorted((recorder.clip_dir.parent / "tares").glob("*_tare_s*.json")):
+        try:
+            db.save_tare(int(p.name.split("_")[0]), json.loads(p.read_text()))
+            tares += 1
+        except (ValueError, OSError):
+            print(f"skipped unreadable tare record {p.name}")
+    print(f"queued {tares} tare record(s); ones already in the database are skipped")
 
 
 async def collect(recorder: Recorder, reader: Reader, session: int, labels: list[str], seconds: float) -> None:
@@ -79,9 +105,7 @@ async def collect(recorder: Recorder, reader: Reader, session: int, labels: list
     print("Labels:", ", ".join(allowed.values()))
     last = labels[0] if labels else ""
     while True:
-        counts = await recorder.counts()
-        if counts:
-            print("Saved so far:", ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+        print_counts(recorder, session)
         label = await ask(f"\nLabel{f' [{last}]' if last else ''} (q = quit): ")
         if label.lower() in ("q", "quit", "exit"):
             return
