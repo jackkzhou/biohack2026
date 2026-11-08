@@ -343,7 +343,7 @@ export default function Calibrate() {
                             {x.current && <span className="ml-1 text-xs font-normal text-accent">current</span>}
                           </span>
                           <span className="flex-1 text-sm tabular-nums text-muted">{x.tared ? `${x.total} takes` : 'no tare (can’t use)'}</span>
-                          <label className="flex items-center gap-1 text-sm text-muted">
+                          <label className={`flex items-center gap-1 text-sm text-muted ${v.on ? '' : 'opacity-60'}`}>
                             ×
                             <input
                               type="number"
@@ -352,7 +352,7 @@ export default function Calibrate() {
                               step={0.5}
                               className="w-16 rounded-lg border border-border bg-surface px-2 py-1 text-base text-ink"
                               value={v.w}
-                              disabled={!x.tared || !v.on}
+                              disabled={!x.tared}
                               aria-label={`Weight for session ${x.session}`}
                               onChange={(e) => edit(x.session, { w: Math.max(0, Number(e.target.value) || 0) })}
                             />
