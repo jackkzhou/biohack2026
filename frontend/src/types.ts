@@ -64,6 +64,11 @@ export interface ModelMetrics {
 
 export type PhrasingMode = 'lookup' | 'llm';
 
+export interface Voice {
+  voice_id: string;
+  name: string;
+}
+
 export interface Api {
   postUtterance(audio: Blob, startedAtMs: number): Promise<UtteranceResult>;
   listClips(): Promise<ClipInfo[]>;
@@ -78,6 +83,8 @@ export interface Api {
   clearPhrase(): Promise<void>;
   setMuted(muted: boolean): Promise<void>;
   setPhrasingMode(mode: PhrasingMode): Promise<void>;
+  listVoices(): Promise<Voice[]>;
+  selectVoice(voiceId: string): Promise<void>;
   getMetrics(): Promise<ModelMetrics>;
 }
 

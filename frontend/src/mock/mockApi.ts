@@ -1,4 +1,4 @@
-import type { Api, Clip, ModelMetrics, UtteranceResult } from '../types';
+import type { Api, Clip, ModelMetrics, UtteranceResult, Voice } from '../types';
 import { mockEngine } from './engine';
 import { synthWindow } from './signal';
 import { jitter, pick, sleep } from './util';
@@ -13,6 +13,12 @@ const clips = new Map<number, StoredClip>();
 const counts: Record<string, number> = { help: 7, yes: 5, no: 6, Jordan: 4, water: 8, nothing: 3 };
 let nextClipId = 100;
 let pending: { label: string } | null = null;
+
+const MOCK_VOICES: Voice[] = [
+  { voice_id: 'mock-voice-1', name: 'Jordan (cloned)' },
+  { voice_id: 'mock-voice-2', name: 'Rachel' },
+  { voice_id: 'mock-voice-3', name: 'Adam' },
+];
 
 const delay = () => sleep(jitter(120, 350));
 
@@ -109,6 +115,12 @@ export const mockApi: Api = {
   async clearPhrase() {},
   async setMuted() {},
   async setPhrasingMode() {},
+
+  async listVoices() {
+    await delay();
+    return MOCK_VOICES;
+  },
+  async selectVoice() {},
 
   async getMetrics() {
     await sleep(jitter(250, 500));

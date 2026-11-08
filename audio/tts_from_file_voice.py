@@ -53,7 +53,11 @@ def clone_voice_from_file(file_path: str, voice_name: str = "cloned_user_voice")
 
     client = _get_client()
     with open(path, "rb") as f:
-        voice = client.voices.add(name=voice_name, files=[f])
+        # elevenlabs>=1.0 moved instant voice cloning under voices.ivc; older SDKs have voices.add.
+        if hasattr(client.voices, "ivc"):
+            voice = client.voices.ivc.create(name=voice_name, files=[f])
+        else:
+            voice = client.voices.add(name=voice_name, files=[f])
 
     _voice_cache[file_path] = voice.voice_id
     log.info("Cloned voice %r from %s -> voice_id=%s", voice_name, path, voice.voice_id)

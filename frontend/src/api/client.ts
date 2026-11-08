@@ -35,6 +35,8 @@ const realApi: Api = {
   clearPhrase: () => http('/phrase/clear', json('POST')),
   setMuted: (muted) => http('/voice/mute', json('POST', { muted })),
   setPhrasingMode: (mode) => http('/phrasing/mode', json('POST', { mode })),
+  listVoices: () => http('/voice/list'),
+  selectVoice: (voiceId) => http('/voice/select', json('POST', { voice_id: voiceId })),
   getMetrics: () => http('/model/metrics'),
 };
 

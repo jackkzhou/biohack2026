@@ -203,6 +203,10 @@ class MuteBody(BaseModel):
     muted: bool
 
 
+class VoiceBody(BaseModel):
+    voice_id: str
+
+
 class ModeBody(BaseModel):
     mode: Literal["lookup", "llm"]
 
@@ -286,6 +290,17 @@ async def phrase_clear() -> Response:
 @app.post("/voice/mute", status_code=204)
 async def voice_mute(body: MuteBody) -> Response:
     state.muted = body.muted
+    return Response(status_code=204)
+
+
+@app.get("/voice/list")
+async def voice_list() -> list[dict[str, str]]:
+    return await tts.list_voices() or []
+
+
+@app.post("/voice/select", status_code=204)
+async def voice_select(body: VoiceBody) -> Response:
+    tts.set_voice(body.voice_id)
     return Response(status_code=204)
 
 
