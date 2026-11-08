@@ -54,29 +54,71 @@ def session_counts(clip_dir: Path, session: int | None) -> dict[str, int]:
     return out
 
 
-def _train(clip_dir: Path, tares_dir: Path, words: list[str], session: int, weight: float, out_dir: Path) -> dict:
+def list_sessions(clip_dir: Path, tares_dir: Path, current: int | None) -> list[dict]:
+    """Every recorded session: takes per word, whether it has a tare (so it can be used), and whether it is the
+    calibration in progress."""
+    counts: dict[int, dict[str, int]] = {}
+    for p in clip_dir.glob("*_record_*_s*.csv"):
+        m = re.match(r"\d+_record_(.*)_s(-?\d+)\.csv$", p.name)
+        if m:
+            d = counts.setdefault(int(m[2]), {})
+            d[m[1]] = d.get(m[1], 0) + 1
+    tared = tared_sessions(tares_dir)
+    return [{"session": k, "total": sum(v.values()), "counts": dict(sorted(v.items())), "tared": k in tared,
+             "current": k == current} for k, v in sorted(counts.items())]
+
+
+def _train(clip_dir: Path, tares_dir: Path, words: list[str], session: int | None, weight: float, out_dir: Path,
+           selection: dict[int, float] | None = None) -> dict:
+    """Train the calibrated random forest.
+
+    Default (selection=None): every tared session at weight 1, `session` (the calibration just recorded) at `weight`,
+    and the classes are the words that calibration covered. With `selection` ({session: weight}) exactly those
+    sessions are used at those weights, and the classes are every word with enough takes in them."""
     from ml.silent_model import SilentSpeechRF
     from ml.train import load_clips
 
     X, y, s = load_clips(clip_dir, ["record"], 0.12, {w.lower() for w in words}, None, "default")
     if len(y) == 0:
         raise CalibrationError("no usable clips found")
-    keep = np.isin(s, sorted(tared_sessions(tares_dir) | {session}))  # old untared sessions would not match tared live data
+    tared = tared_sessions(tares_dir) | ({session} if session is not None else set())
+    if selection is None:
+        if session is None:
+            raise CalibrationError("start a calibration first")
+        w_by = {k: 1.0 for k in tared}
+        w_by[session] = weight
+    else:
+        bad = sorted(k for k in selection if k not in tared)
+        if bad:
+            raise CalibrationError(f"session(s) {bad} have no tare, so they do not match live data", 400)
+        w_by = {int(k): float(v) for k, v in selection.items() if float(v) > 0}
+        if not w_by:
+            raise CalibrationError("select at least one session with a weight above 0", 400)
+    keep = np.isin(s, sorted(w_by))
     X, y, s = X[keep], y[keep], s[keep]
-    new = s == session
-    if not new.any():
-        raise CalibrationError("no clips were recorded in this calibration session", 409)
-    present = [w for w in words if (y[new] == w).any()]  # the classes this calibration actually covers
+    if len(y) == 0:
+        raise CalibrationError("the selected sessions have no clips", 409)
+    sw = np.array([w_by[int(k)] for k in s], dtype=float)
+    if selection is None:
+        new = s == session
+        if not new.any():
+            raise CalibrationError("no clips were recorded in this calibration session", 409)
+        present = [w for w in words if (y[new] == w).any()]  # the classes this calibration actually covers
+        if "nothing" in words and "nothing" not in present and ((y == "nothing") & ~new).sum() >= MIN_BASE_PER_CLASS:
+            present.append("nothing")  # the reject class is essential: keep it from the older sessions if this one has none
+    else:
+        new = np.zeros(len(y), bool)
+        present = [w for w in words if (y == w).sum() >= MIN_BASE_PER_CLASS]
     if len(present) < 2:
-        raise CalibrationError("record at least two different words (nothing counts as one)", 409)
+        raise CalibrationError("need at least two different words (nothing counts as one)", 409)
     sel = np.isin(y, present)
-    X, y, s, new = X[sel], y[sel], s[sel], new[sel]
-    counts = {w: int((y[new] == w).sum()) for w in present}
+    X, y, s, new, sw = X[sel], y[sel], s[sel], new[sel], sw[sel]
+    counts = {w: int((y[new] == w).sum()) if selection is None else int((y == w).sum()) for w in present}
     base_counts = {w: int(((y == w) & ~new).sum()) for w in present}
     thin = [w for w in present if base_counts[w] < MIN_BASE_PER_CLASS]
     if thin:
         log.warning("few older takes for %s; relying on the new session", thin)
-    model = SilentSpeechRF(300, 42).fit(X, y, sample_weight=np.where(new, weight, 1.0))
+    model = SilentSpeechRF(300, 42).fit(X, y, sample_weight=sw)
     model.preprocess = "default"
     out_dir.mkdir(parents=True, exist_ok=True)
     import joblib
@@ -84,7 +126,8 @@ def _train(clip_dir: Path, tares_dir: Path, words: list[str], session: int, weig
     joblib.dump(model, out_dir / "model.joblib")
     (out_dir / "labels.json").write_text(json.dumps([str(c) for c in model.classes_]))
     meta = {"trained_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "session": session, "weight": weight,
-            "new_takes": counts, "base_takes": base_counts, "base_sessions": sorted(set(s[~new].tolist()))}
+            "new_takes": counts, "base_takes": base_counts, "base_sessions": sorted(set(s[~new].tolist())),
+            "session_weights": {str(k): v for k, v in sorted(w_by.items())}}
     (out_dir / "metrics.json").write_text(json.dumps(meta, indent=2))
     return {"model": model, "meta": meta}
 
@@ -104,7 +147,9 @@ class Calibration:
         counts = session_counts(self.clip_dir, self.session)
         return {"words": self.words, "allowed": self.allowed, "takes_per_word": self.takes, "seconds": 3.0,
                 "tared": tared, "model_loaded": inference.model_loaded, "calibrated": self.calibrated,
-                "session": self.session, "counts": counts, "can_undo": self._previous is not None}
+                "session": self.session, "counts": counts, "can_undo": self._previous is not None,
+                "saved": self.saved(), "default_weight": self.weight,
+                "sessions": list_sessions(self.clip_dir, self.tares_dir, self.session)}
 
     def begin(self, words: list[str] | None, takes: int | None, keep_session: bool) -> dict:
         """Start recording takes. `keep_session` adds to the current calibration session (same tare, same
@@ -122,16 +167,16 @@ class Calibration:
         random.shuffle(order)
         return {"session": session, "order": order}
 
-    async def train(self, inference: Inference, session: int | None) -> dict:
+    async def train(self, inference: Inference, session: int | None, selection: dict[int, float] | None = None) -> dict:
         session = session if session is not None else self.session
-        if session is None:
+        if session is None and selection is None:
             raise CalibrationError("start a calibration first")
         if self._lock.locked():
             raise CalibrationError("already training", 409)
         async with self._lock:
             loop = asyncio.get_running_loop()
             out = await loop.run_in_executor(
-                None, _train, self.clip_dir, self.tares_dir, self.allowed, session, self.weight, self.out_dir)
+                None, _train, self.clip_dir, self.tares_dir, self.allowed, session, self.weight, self.out_dir, selection)
             model = out["model"]
             new = ModelClassifier(model, [str(c) for c in model.classes_])
             previous = inference.set_classifier(new)
@@ -140,6 +185,61 @@ class Calibration:
             self.calibrated = True
             log.info("calibrated model live (session %s, %s)", session, out["meta"]["new_takes"])
             return {"ok": True, **out["meta"], "labels": new.labels}
+
+    def saved(self) -> dict | None:
+        """The calibrated model last saved by train(), if any."""
+        mp, meta = self.out_dir / "model.joblib", self.out_dir / "metrics.json"
+        if not (mp.exists() and meta.exists()):
+            return None
+        try:
+            j = json.loads(meta.read_text())
+        except (OSError, ValueError):
+            return None
+        return {"session": j.get("session"), "trained_at": j.get("trained_at"), "new_takes": j.get("new_takes", {})}
+
+    def load_saved(self, inference: Inference, calibrator, reader) -> dict:
+        """Put the saved calibrated model back in service (e.g. after a backend restart) and, if no tare is in
+        effect, restore the tare it was trained with. Returns how well the restored tare still lines the two
+        sensors up: the angle between the (rotated) chin gravity and the head gravity right now."""
+        import joblib
+
+        info = self.saved()
+        if info is None:
+            raise CalibrationError("no saved calibration to load", 404)
+        restored = False
+        if not calibrator.enabled:
+            session = info["session"]
+            recs = sorted(self.tares_dir.glob(f"*_tare_s{session}.json"))
+            good = []
+            for p in recs:
+                try:
+                    j = json.loads(p.read_text())
+                except (OSError, ValueError):
+                    continue
+                if j.get("ok") and j.get("rotation"):
+                    good.append(j)
+            if not good:
+                raise CalibrationError(f"no tare record for session {session}: tare, then load again", 409)
+            calibrator.load(good[-1])
+            restored = True
+        model = joblib.load(self.out_dir / "model.joblib")
+        new = ModelClassifier(model, [str(c) for c in model.classes_])
+        previous = inference.set_classifier(new)
+        if not self.calibrated:
+            self._previous = (previous,)
+        self.calibrated = True
+        self.session = info["session"]
+        angle = None
+        now = reader.latest_time()
+        if now is not None:
+            chin, head = reader.window_both(now - 1.0, now)
+            if len(chin) >= 5 and len(head) >= 5:
+                chin, head = calibrator.apply(chin, head)
+                a, b = chin[:, 5:8].mean(0), head[:, 5:8].mean(0)
+                cos = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+                angle = round(float(np.degrees(np.arccos(np.clip(cos, -1, 1)))), 1)
+        log.info("loaded saved calibration (session %s); tare restored=%s, gravity mismatch %s deg", info["session"], restored, angle)
+        return {"ok": True, "session": info["session"], "tare_restored": restored, "gravity_mismatch_deg": angle, "labels": new.labels}
 
     def undo(self, inference: Inference) -> None:
         if self._previous is None:

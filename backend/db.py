@@ -275,14 +275,18 @@ class Database:
                 pass
 
     async def _flush(self) -> None:
-        # ordered, important writes first (an op stays queued until it succeeds)
-        while self._ops:
-            op = self._ops[0]
-            async with self._pool.acquire() as con:
-                await self._apply(con, op)
-            self._ops.popleft()
-        # raw samples: best effort, a failed batch is dropped rather than retried forever
-        while self._samples:
+        # Ordered, important writes (clips, tares, phrases) come first and are re-checked between every raw-sample
+        # batch: the raw stream arrives faster than a remote database can take it, so draining it to empty would
+        # otherwise starve these writes indefinitely. An op stays queued until it succeeds.
+        while self._ops or self._samples:
+            while self._ops:
+                op = self._ops[0]
+                async with self._pool.acquire() as con:
+                    await self._apply(con, op)
+                self._ops.popleft()
+            if not self._samples:
+                break
+            # raw samples: best effort, a failed batch is dropped rather than retried forever
             batch = [self._samples.popleft() for _ in range(min(SAMPLE_BATCH, len(self._samples)))]
             try:
                 async with self._pool.acquire() as con:
@@ -290,6 +294,11 @@ class Database:
             except Exception:
                 self.dropped_samples += len(batch)
                 raise
+            if len(self._samples) > 4 * SAMPLE_BATCH:  # hopelessly behind: shed the oldest raw samples, keep the clips
+                drop = len(self._samples) - 2 * SAMPLE_BATCH
+                for _ in range(drop):
+                    self._samples.popleft()
+                self.dropped_samples += drop
 
     async def _apply(self, con: Any, op: tuple) -> None:
         kind = op[0]

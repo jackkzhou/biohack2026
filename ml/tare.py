@@ -117,6 +117,14 @@ class TareCalibrator:
         """What the last successful tare computed (rotation, its angle, both mean quaternions)."""
         return dict(self._info)
 
+    def load(self, info: dict) -> None:
+        """Restore a tare saved in data/tares (its `rotation` plus the quaternions it came from)."""
+        rot = np.asarray(info["rotation"], dtype=float)
+        if rot.shape != (3, 3):
+            raise ValueError("saved tare has no 3x3 rotation")
+        self._rotation = rot
+        self._info = {k: info[k] for k in ("rotation", "rotation_angle_deg", "q_jaw", "q_head") if k in info}
+
     def clear(self) -> None:
         self._rotation = None
         self._info = {}

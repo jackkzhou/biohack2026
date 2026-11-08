@@ -15,6 +15,7 @@ export default function Calibrate() {
   const [info, setInfo] = useState<CalibrateInfo | null>(null);
   const [phase, setPhase] = useState<Phase>('home');
   const [message, setMessage] = useState('');
+  const [notice, setNotice] = useState(''); // success note, e.g. after retraining from the Training data panel
   const [order, setOrder] = useState<string[]>([]);
   const [index, setIndex] = useState(0);
   const [recording, setRecording] = useState(false);
@@ -24,7 +25,11 @@ export default function Calibrate() {
   const [selected, setSelected] = useState<string[]>([]);
   const [takes, setTakes] = useState(10);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [showData, setShowData] = useState(false); // "Training data" panel: which sessions to train on, and their weights
+  const [sel, setSel] = useState<Record<number, { on: boolean; w: number }>>({});
   const cancel = useRef(false);
+  const retry = useRef(false); // redo the current take (discarding it if it was already recording)
+  const skipTrain = useRef(false); // stop without training
   const inited = useRef(false);
 
   const refresh = useCallback(() => api.calibrateInfo().then(setInfo).catch(() => setInfo(null)), []);
@@ -42,6 +47,42 @@ export default function Calibrate() {
       setTakes(info.takes_per_word);
     }
   }, [info]);
+
+  // Defaults follow the current calibration: it gets the default weight (5x), every other session goes back to 1x.
+  // A row you changed by hand (checkbox or weight) is left alone.
+  const touched = useRef(new Set<number>());
+  useEffect(() => {
+    if (!info) return;
+    setSel((cur) => {
+      const next = { ...cur };
+      for (const x of info.sessions) {
+        if (touched.current.has(x.session) && next[x.session]) continue;
+        next[x.session] = { on: x.tared, w: x.current ? info.default_weight : 1 };
+      }
+      return next;
+    });
+  }, [info]);
+  const edit = (session: number, patch: Partial<{ on: boolean; w: number }>) => {
+    touched.current.add(session);
+    setSel((c) => ({ ...c, [session]: { ...(c[session] ?? { on: true, w: 1 }), ...patch } }));
+  };
+
+  const trainSelected = useCallback(async () => {
+    const weights: Record<number, number> = {};
+    for (const [k, v] of Object.entries(sel)) if (v.on && v.w > 0) weights[Number(k)] = v.w;
+    setPhase('training');
+    setNotice('');
+    try {
+      const out = await api.calibrateTrain(null, weights);
+      const n = Object.keys(weights).length;
+      setMessage('');
+      setNotice(`Model updated: ${n} session${n === 1 ? '' : 's'} · ${(out.labels ?? []).join(', ')}`);
+    } catch (e) {
+      setMessage((e as Error).message);
+    }
+    setPhase('home');
+    void refresh();
+  }, [sel, refresh]);
 
   const recorded = info ? Object.values(info.counts).reduce((a, b) => a + b, 0) : 0;
   const hasSession = !!info && info.session !== null && recorded > 0;
@@ -65,7 +106,10 @@ export default function Calibrate() {
 
   const start = async () => {
     cancel.current = false;
+    retry.current = false;
+    skipTrain.current = false;
     setMessage('');
+    setNotice('');
     let begun: { session: number; order: string[] };
     try {
       begun = await api.calibrateBegin({ words: selected, takes, keepSession: keep });
@@ -77,25 +121,32 @@ export default function Calibrate() {
     setOrder(begun.order);
     setPhase('running');
     let saved = 0;
+    // waits `ms`, returning early if the user pressed Stop or Retry
+    const wait = async (ms: number) => {
+      const t0 = performance.now();
+      while (performance.now() - t0 < ms && !cancel.current && !retry.current) await sleep(40);
+    };
     for (let i = 0; i < begun.order.length && !cancel.current; i++) {
       setIndex(i);
-      setProgress(0);
-      setRecording(false);
-      await sleep(GET_READY_MS);
-      if (cancel.current) break;
       let ok = false;
       while (!ok && !cancel.current) {
+        retry.current = false;
+        setProgress(0);
+        setRecording(false);
+        await wait(GET_READY_MS);
+        if (cancel.current) break;
+        if (retry.current) continue; // pressed Retry while getting ready: start the countdown again
         try {
           await api.recordStart(begun.order[i], begun.session);
           setRecording(true);
           const t0 = performance.now();
-          while (performance.now() - t0 < seconds * 1000 && !cancel.current) {
+          while (performance.now() - t0 < seconds * 1000 && !cancel.current && !retry.current) {
             setProgress((performance.now() - t0) / (seconds * 1000));
             await sleep(50);
           }
           const res = await api.recordStop();
           setRecording(false);
-          if (cancel.current) void api.deleteClip(res.clip_id).catch(() => {}); // a cut-short take is not a clean sample
+          if (cancel.current || retry.current) void api.deleteClip(res.clip_id).catch(() => {}); // cut short or redone: not a clean sample
           else {
             ok = true;
             saved++;
@@ -111,7 +162,7 @@ export default function Calibrate() {
       }
     }
     setRecording(false);
-    if (saved === 0) {
+    if (saved === 0 || skipTrain.current) {
       setPicking(false);
       setPhase('home');
       void refresh();
@@ -122,6 +173,13 @@ export default function Calibrate() {
 
   const stop = () => {
     cancel.current = true;
+  };
+  const cancelRun = () => {
+    skipTrain.current = true;
+    cancel.current = true;
+  };
+  const retryTake = () => {
+    retry.current = true;
   };
 
   const continueCalibration = () => {
@@ -169,9 +227,17 @@ export default function Calibrate() {
           <div className="h-3 w-full max-w-md overflow-hidden rounded-full bg-border" aria-hidden>
             <div className="h-full rounded-full bg-accent" style={{ width: `${progress * 100}%`, transition: 'width 0.05s linear' }} />
           </div>
-          <button className="btn" onClick={stop}>
-            Stop &amp; train
-          </button>
+          <div className="flex flex-wrap justify-center gap-3">
+            <button className="btn btn-primary" onClick={retryTake}>
+              Retry take
+            </button>
+            <button className="btn" onClick={stop}>
+              Stop &amp; train
+            </button>
+            <button className="btn" onClick={cancelRun}>
+              Cancel
+            </button>
+          </div>
         </section>
       )}
 
@@ -251,6 +317,64 @@ export default function Calibrate() {
             </>
           )}
 
+
+          {info && info.sessions.length > 0 && (
+            <div className="w-full max-w-xl text-left">
+              <button className="btn !min-h-[2.25rem] mx-auto block" aria-expanded={showData} onClick={() => setShowData((v) => !v)}>
+                {showData ? 'Hide training data' : 'Training data'}
+              </button>
+              {showData && (
+                <div className="mt-3 rounded-xl border border-border p-3">
+                  <ul className="divide-y divide-border">
+                    {info.sessions.map((x) => {
+                      const v = sel[x.session] ?? { on: x.tared, w: 1 };
+                      return (
+                        <li key={x.session} className={`flex items-center gap-3 py-2 ${x.tared ? '' : 'opacity-50'}`}>
+                          <input
+                            type="checkbox"
+                            className="h-5 w-5"
+                            checked={v.on && x.tared}
+                            disabled={!x.tared}
+                            aria-label={`Include session ${x.session}`}
+                            onChange={(e) => edit(x.session, { on: e.target.checked })}
+                          />
+                          <span className="w-24 font-semibold">
+                            S{x.session}
+                            {x.current && <span className="ml-1 text-xs font-normal text-accent">current</span>}
+                          </span>
+                          <span className="flex-1 text-sm tabular-nums text-muted">{x.tared ? `${x.total} takes` : 'no tare (can’t use)'}</span>
+                          <label className="flex items-center gap-1 text-sm text-muted">
+                            ×
+                            <input
+                              type="number"
+                              min={0}
+                              max={20}
+                              step={0.5}
+                              className="w-16 rounded-lg border border-border bg-surface px-2 py-1 text-base text-ink"
+                              value={v.w}
+                              disabled={!x.tared || !v.on}
+                              aria-label={`Weight for session ${x.session}`}
+                              onChange={(e) => edit(x.session, { w: Math.max(0, Number(e.target.value) || 0) })}
+                            />
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div className="mt-3 flex justify-center">
+                    <button className="btn btn-primary" onClick={() => void trainSelected()} disabled={!Object.values(sel).some((v) => v.on && v.w > 0)}>
+                      Train with these
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {notice && !message && (
+            <p role="status" className="rounded-xl border border-ok bg-ok/10 px-4 py-2 font-semibold text-ok">
+              {notice}
+            </p>
+          )}
           {message && (
             <p role="alert" className="rounded-xl border border-danger bg-danger/10 px-4 py-2 font-medium text-danger">
               {message}

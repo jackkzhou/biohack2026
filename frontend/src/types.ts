@@ -12,7 +12,7 @@ export interface ImuSample {
 export type ServerMessage =
   | { type: 'samples'; data: ImuSample[] }
   | { type: 'word'; word: string; confidence: number }
-  | { type: 'nothing' }
+  | { type: 'nothing'; label?: string; confidence?: number }
   | { type: 'pause'; progress: number }
   | { type: 'phrase'; words: string[]; sentence: string }
   | { type: 'speaking'; active: boolean }
@@ -45,7 +45,18 @@ export interface ClipInfo {
   created_at_ms: number;
 }
 
+export interface SessionInfo {
+  session: number;
+  total: number;
+  counts: Record<string, number>;
+  /** sessions recorded without a tare cannot be used: their chin axes do not match live data */
+  tared: boolean;
+  current: boolean;
+}
+
 export interface CalibrateInfo {
+  default_weight: number;
+  sessions: SessionInfo[];
   words: string[];
   allowed: string[];
   counts: Record<string, number>;
@@ -90,7 +101,7 @@ export interface Api {
   tare(): Promise<void>;
   calibrateInfo(): Promise<CalibrateInfo>;
   calibrateBegin(opts: { words: string[]; takes: number; keepSession: boolean }): Promise<{ session: number; order: string[] }>;
-  calibrateTrain(session: number): Promise<{ ok: boolean; new_takes: Record<string, number> }>;
+  calibrateTrain(session: number | null, weights?: Record<number, number>): Promise<{ ok: boolean; new_takes: Record<string, number>; labels?: string[] }>;
   calibrateUndo(): Promise<void>;
   calibrateReset(): Promise<void>;
   recordRestPose(session: number): Promise<void>;

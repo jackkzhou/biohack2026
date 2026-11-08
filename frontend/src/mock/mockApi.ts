@@ -82,7 +82,7 @@ export const mockApi: Api = {
   },
 
   async calibrateInfo() {
-    return { words: ['help', 'Jordan', 'no', 'nothing'], allowed: ['help', 'yes', 'no', 'Jordan', 'water', 'nothing'], counts: { ...mockCounts }, takes_per_word: 3, seconds: 3, tared: true, model_loaded: true, calibrated: mockCalibrated, session: Object.keys(mockCounts).length ? 7 : null, can_undo: mockCalibrated };
+    return { default_weight: 5, sessions: [{ session: 4, total: 91, counts: { help: 15, no: 16 }, tared: true, current: false }, { session: 7, total: 30, counts: { help: 5, no: 5 }, tared: true, current: Object.keys(mockCounts).length > 0 }], words: ['help', 'Jordan', 'no', 'nothing'], allowed: ['help', 'yes', 'no', 'Jordan', 'water', 'nothing'], counts: { ...mockCounts }, takes_per_word: 3, seconds: 3, tared: true, model_loaded: true, calibrated: mockCalibrated, session: Object.keys(mockCounts).length ? 7 : null, can_undo: mockCalibrated };
   },
 
   async calibrateBegin({ words, takes, keepSession }) {

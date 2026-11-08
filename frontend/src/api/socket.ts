@@ -26,6 +26,8 @@ interface State {
   nothing: boolean;
   /** increments on every such event */
   nothingCount: number;
+  /** what the model thought it heard in the last rejected detection (low confidence or the 'nothing' class) */
+  guess: { label: string; confidence: number; at: number } | null;
   speaking: boolean;
   muted: boolean;
 }
@@ -35,7 +37,7 @@ type Action =
   | { type: 'streaming'; streaming: boolean }
   | { type: 'status'; connected: boolean; rate_hz: number[]; dropped: number }
   | { type: 'word'; word: DetectedWord }
-  | { type: 'nothing' }
+  | { type: 'nothing'; label?: string; confidence?: number }
   | { type: 'pause'; progress: number }
   | { type: 'phrase'; words: string[]; sentence: string }
   | { type: 'speaking'; active: boolean }
@@ -52,6 +54,7 @@ const initial: State = {
   phraseCount: 0,
   nothing: false,
   nothingCount: 0,
+  guess: null,
   speaking: false,
   muted: false,
 };
@@ -72,7 +75,12 @@ function reducer(s: State, a: Action): State {
       return { ...s, currentWords: [...base, a.word], phrase: null, pauseProgress: 0, nothing: false };
     }
     case 'nothing':
-      return { ...s, nothingCount: s.nothingCount + 1, nothing: s.currentWords.length === 0 && !s.phrase };
+      return {
+        ...s,
+        nothingCount: s.nothingCount + 1,
+        nothing: s.currentWords.length === 0 && !s.phrase,
+        guess: a.label !== undefined && a.confidence !== undefined ? { label: a.label, confidence: a.confidence, at: Date.now() } : s.guess,
+      };
     case 'pause':
       return { ...s, pauseProgress: a.progress };
     case 'phrase':
@@ -132,7 +140,7 @@ export function useLiveSocket(): LiveStream {
           dispatch({ type: 'word', word: { id: ++wordId.current, word: m.word, confidence: m.confidence } });
           break;
         case 'nothing':
-          dispatch({ type: 'nothing' });
+          dispatch({ type: 'nothing', label: m.label, confidence: m.confidence });
           break;
         case 'pause':
           dispatch({ type: 'pause', progress: m.progress });

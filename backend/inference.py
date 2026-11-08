@@ -31,20 +31,14 @@ MAX_WORD_S = 3.0  # training takes are 3 s
 MIN_WORD_S = 0.3
 NOTHING = "nothing"
 
-# Ordered key first, then order-insensitive key; unknown combinations get a generic sentence.
+# Each word is spoken and shown as just its label (no sentences, no combinations, see SINGLE_WORD). With several words the ordered key
+# is tried first, then the order-insensitive one; anything unknown gets a generic sentence.
 DEFAULT_PHRASES: dict[str, str] = {
-    "help": "Please help me.",
-    "yes": "Yes.",
-    "no": "No, thank you.",
-    "water": "Can I have some water, please?",
-    "jordan": "Jordan.",
-    "help+jordan": "Jordan, I need your help.",
-    "jordan+water": "Jordan, can I have some water?",
-    "help+water": "I need water, please help.",
-    "jordan+yes": "Jordan, yes.",
-    "jordan+no": "Jordan, no.",
-    "no+water": "No water, thank you.",
-    "water+yes": "Yes, I would like some water.",
+    "help": "Help",
+    "yes": "Yes",
+    "no": "No",
+    "water": "Water",
+    "jordan": "Jordan",
 }
 
 
@@ -178,6 +172,8 @@ class Inference:
         self.base_threshold = self.threshold = activity_threshold
         self.on_detection = on_detection
         self.mode = "lookup"
+        self.last_activity = 0.0  # newest motion level (rad/s), for the status message
+        self.single_word = False  # True: every accepted word is its own phrase (no combinations)
         # a model trained without orientation also gets orientation-free motion detection
         self._activity = activity_level_invariant if getattr(classifier, "orientation_free", False) else activity_level
         self._words: list[str] = []
@@ -224,7 +220,8 @@ class Inference:
         if now is None or not self.reader.connected:
             return  # no live data: freeze the state machine rather than invent stillness
         chin, head = self.calibrator.apply(*self.reader.window_both(now - ACT_WINDOW_S, now))
-        active = self._activity(chin, head) > self.threshold
+        self.last_activity = self._activity(chin, head)
+        active = self.last_activity > self.threshold
 
         if active:
             self._last_active = now
@@ -257,10 +254,12 @@ class Inference:
             self.on_detection(end, label, conf, accepted)
         if not accepted:
             log.debug("ignored %s (%.2f)", label, conf)
-            await self.emit({"type": "nothing"})  # lets the UI say "nothing detected"
+            await self.emit({"type": "nothing", "label": label, "confidence": round(conf, 2)})  # UI: "nothing detected" + best guess
             return
         self._words.append(label)
         await self.emit({"type": "word", "word": label, "confidence": round(conf, 2)})
+        if self.single_word:
+            await self._end_phrase()
 
     async def _progress(self, p: float) -> None:
         if not self._words:

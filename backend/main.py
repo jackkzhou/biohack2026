@@ -111,7 +111,8 @@ async def sample_pump() -> None:
 
 
 def status_message() -> dict:
-    return {"type": "status", "connected": reader.connected, "rate_hz": reader.rates(), "dropped": reader.dropped}
+    return {"type": "status", "connected": reader.connected, "rate_hz": reader.rates(), "dropped": reader.dropped,
+            "activity": round(inference.last_activity, 3), "threshold": round(inference.threshold, 3)}
 
 
 async def status_pump() -> None:
@@ -145,6 +146,7 @@ async def lifespan(app: FastAPI):
         activity_threshold=settings.activity_threshold, on_detection=db.save_detection,
         calibrator=calibrator,
     )
+    inference.single_word = settings.single_word
     recorder.on_rest_noise = inference.calibrate
     if fake:
         def on_start(label: str) -> None:
@@ -255,6 +257,7 @@ async def delete_clip(clip_id: int) -> Response:
 
 class TrainBody(BaseModel):
     session: int | None = None
+    weights: dict[str, float] | None = None  # {session: weight} = train on exactly these sessions at these weights
 
 
 class BeginBody(BaseModel):
@@ -279,7 +282,31 @@ async def calibrate_begin(body: BeginBody) -> dict:
 
 @app.post("/calibrate/train")
 async def calibrate_train(body: TrainBody) -> dict:
-    return await calib.train(inference, body.session)
+    selection = {int(k): v for k, v in body.weights.items()} if body.weights is not None else None
+    return await calib.train(inference, body.session, selection)
+
+
+class ConfBody(BaseModel):
+    value: float
+
+
+@app.get("/settings/conf")
+async def get_conf() -> dict:
+    return {"conf_threshold": inference.conf_threshold}
+
+
+@app.post("/settings/conf")
+async def set_conf(body: ConfBody) -> dict:
+    """Minimum confidence for a detected word to be accepted (no restart needed)."""
+    if not 0.05 <= body.value <= 0.95:
+        raise HTTPException(400, "value must be between 0.05 and 0.95")
+    inference.conf_threshold = body.value
+    return {"conf_threshold": inference.conf_threshold}
+
+
+@app.post("/calibrate/load")
+async def calibrate_load() -> dict:
+    return calib.load_saved(inference, calibrator, reader)
 
 
 @app.post("/calibrate/reset", status_code=204)

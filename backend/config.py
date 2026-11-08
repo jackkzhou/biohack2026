@@ -56,6 +56,7 @@ class Settings:
     conf_threshold: float = field(default_factory=lambda: _float("CONF_THRESHOLD", 0.6))
     phrase_pause_s: float = field(default_factory=lambda: _float("PHRASE_PAUSE_S", 1.5))
     activity_threshold: float = field(default_factory=lambda: _float("ACTIVITY_THRESHOLD", 0.12))
+    single_word: bool = field(default_factory=lambda: _bool("SINGLE_WORD", True))  # each word is spoken on its own, no combos
     # on-site calibration (Calibrate tab)
     calib_words: tuple[str, ...] = field(
         default_factory=lambda: tuple(w.strip() for w in _str("CALIB_WORDS", "help,Jordan,no,nothing").split(",") if w.strip())
