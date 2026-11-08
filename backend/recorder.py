@@ -118,19 +118,44 @@ class Recorder:
         rows = np.vstack([chin, head])
         return rows[np.argsort(rows[:, 0], kind="stable")]
 
-    async def tare(self, seconds: float = TARE_SECONDS) -> None:
+    async def tare(self, seconds: float = TARE_SECONDS, session: int | None = None) -> None:
         """Hold both sensors still in a neutral pose for `seconds`, then store the jaw->head
         orientation offset for the rest of this session (see ml.tare). Call this once, right
-        after the hat goes on, before recording or running live inference."""
+        after the hat goes on, before recording or running live inference.
+
+        Every attempt, successful or not, is written to data/tares/ so a session's calibration
+        can be audited later (the clips themselves do not say whether they were tared)."""
         t0 = time.time()
         await asyncio.sleep(seconds)
         chin, head = self.reader.window_both(t0, time.time())
-        if len(chin) < MIN_ROWS_PER_SENSOR or len(head) < MIN_ROWS_PER_SENSOR:
-            raise RecorderError("no sensor data for the tare pose", 503)
+        record: dict = {"session": session, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "seconds": seconds,
+                        "ok": False, "error": None, "n_chin": len(chin), "n_head": len(head)}
         try:
-            self.calibrator.tare(chin, head)
-        except ValueError as e:
-            raise RecorderError(f"tare failed: {e}", 503) from e
+            if len(chin) < MIN_ROWS_PER_SENSOR or len(head) < MIN_ROWS_PER_SENSOR:
+                raise RecorderError("no sensor data for the tare pose", 503)
+            record["gravity_chin"] = chin[:, 5:8].mean(0).round(3).tolist()
+            record["gravity_head"] = head[:, 5:8].mean(0).round(3).tolist()
+            try:
+                self.calibrator.tare(chin, head)
+            except ValueError as e:
+                raise RecorderError(f"tare failed: {e}", 503) from e
+            record.update(ok=True, **self.calibrator.info)
+        except RecorderError as e:
+            record["error"] = str(e)
+            raise
+        finally:
+            self._write_tare_record(record)
+
+    def _write_tare_record(self, record: dict) -> None:
+        try:
+            import json
+
+            d = self.clip_dir.parent / "tares"
+            d.mkdir(parents=True, exist_ok=True)
+            tag = "x" if record["session"] is None else str(record["session"])
+            (d / f"{int(time.time() * 1000)}_tare_s{tag}.json").write_text(json.dumps(record, indent=2))
+        except Exception:  # noqa: BLE001  (never let bookkeeping break recording)
+            log.exception("could not write the tare record")
 
     # ---- manual recording ------------------------------------------------
     def start(self, label: str, session: int) -> None:

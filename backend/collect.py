@@ -71,7 +71,7 @@ async def collect(recorder: Recorder, reader: Reader, session: int, labels: list
     print(f"Streaming: jaw {rates[0]:.0f} Hz, head {rates[1]:.0f} Hz. Session {session}.")
     await ask("Hold the jaw and head still in a neutral pose, then press Enter to tare... ")
     try:
-        await recorder.tare()
+        await recorder.tare(session=session)
         print("Tare OK.")
     except RecorderError as e:
         print(f"Tare failed ({e}); continuing without orientation calibration.")

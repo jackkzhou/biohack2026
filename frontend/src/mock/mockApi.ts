@@ -72,6 +72,10 @@ export const mockApi: Api = {
     clips.delete(id);
   },
 
+  async tare() {
+    await sleep(1500);
+  },
+
   async recordRestPose() {
     await sleep(2000);
   },

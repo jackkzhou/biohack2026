@@ -68,6 +68,7 @@ class TareCalibrator:
 
     def __init__(self) -> None:
         self._rotation: np.ndarray | None = None  # 3x3, jaw raw frame -> head raw frame
+        self._info: dict = {}
 
     @property
     def enabled(self) -> bool:
@@ -90,9 +91,18 @@ class TareCalibrator:
             raise ValueError("tare buffer has no orientation data (quaternions are all zero)")
         r_jaw, r_head = _quat_to_matrix(q_jaw), _quat_to_matrix(q_head)
         self._rotation = r_head.T @ r_jaw  # a jaw-frame vector, expressed in the head's frame
+        angle = float(np.degrees(np.arccos(np.clip((np.trace(self._rotation) - 1) / 2, -1.0, 1.0))))
+        self._info = {"rotation": self._rotation.tolist(), "rotation_angle_deg": round(angle, 2),
+                      "q_jaw": q_jaw.tolist(), "q_head": q_head.tolist()}
+
+    @property
+    def info(self) -> dict:
+        """What the last successful tare computed (rotation, its angle, both mean quaternions)."""
+        return dict(self._info)
 
     def clear(self) -> None:
         self._rotation = None
+        self._info = {}
 
     def apply(self, chin: np.ndarray, head: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Rotate the jaw's gyro+accel into the head's frame using the tared offset.

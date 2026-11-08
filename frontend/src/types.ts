@@ -69,6 +69,7 @@ export interface Api {
   listClips(): Promise<ClipInfo[]>;
   getClip(id: number): Promise<Clip>;
   deleteClip(id: number): Promise<void>;
+  tare(): Promise<void>;
   recordRestPose(session: number): Promise<void>;
   recordStart(label: string, session: number): Promise<void>;
   recordStop(): Promise<{ clip_id: number; label: string }>;

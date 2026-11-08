@@ -26,6 +26,7 @@ const realApi: Api = {
   listClips: () => http('/clips'),
   getClip: (id) => http(`/clips/${id}`),
   deleteClip: (id) => http(`/clips/${id}`, { method: 'DELETE' }),
+  tare: () => http('/record/tare', json('POST')),
   recordRestPose: (session) => http('/record/rest-pose', json('POST', { session })),
   recordStart: (label, session) => http('/record/start', json('POST', { label, session })),
   recordStop: () => http('/record/stop', json('POST')),
