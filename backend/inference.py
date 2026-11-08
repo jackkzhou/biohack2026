@@ -19,6 +19,7 @@ from typing import Any, Awaitable, Callable, Protocol
 import numpy as np
 
 from backend.reader import GYRO, SENSOR_CHIN, SENSOR_HEAD, Reader
+from ml.tare import TareCalibrator
 
 log = logging.getLogger("inference")
 
@@ -168,8 +169,10 @@ class Inference:
         pause_s: float,
         activity_threshold: float,
         on_detection: Callable[[float, str, float, bool], None] | None = None,
+        calibrator: TareCalibrator | None = None,
     ) -> None:
         self.reader, self.classifier, self.emit, self.on_phrase = reader, classifier, emit, on_phrase
+        self.calibrator = calibrator or TareCalibrator()
         self.phrases = phrases
         self.conf_threshold, self.pause_s = conf_threshold, pause_s
         self.base_threshold = self.threshold = activity_threshold
@@ -212,7 +215,7 @@ class Inference:
         now = self.reader.latest_time()
         if now is None or not self.reader.connected:
             return  # no live data: freeze the state machine rather than invent stillness
-        chin, head = self.reader.window_both(now - ACT_WINDOW_S, now)
+        chin, head = self.calibrator.apply(*self.reader.window_both(now - ACT_WINDOW_S, now))
         active = self._activity(chin, head) > self.threshold
 
         if active:
@@ -239,6 +242,7 @@ class Inference:
         chin, head = self.reader.window_both(start - SEGMENT_PAD_S, end + SEGMENT_PAD_S)
         if self.classifier is None or len(chin) < 5 or len(head) < 5:
             return
+        chin, head = self.calibrator.apply(chin, head)
         label, conf = await loop.run_in_executor(None, self.classifier.classify, chin, head)
         accepted = label != NOTHING and conf >= self.conf_threshold
         if self.on_detection:

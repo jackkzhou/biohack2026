@@ -69,6 +69,12 @@ async def collect(recorder: Recorder, reader: Reader, session: int, labels: list
     await asyncio.sleep(1.0)
     rates = reader.rates()
     print(f"Streaming: jaw {rates[0]:.0f} Hz, head {rates[1]:.0f} Hz. Session {session}.")
+    await ask("Hold the jaw and head still in a neutral pose, then press Enter to tare... ")
+    try:
+        await recorder.tare()
+        print("Tare OK.")
+    except RecorderError as e:
+        print(f"Tare failed ({e}); continuing without orientation calibration.")
     allowed = {w.lower(): w for w in [*VOCAB, NOTHING]}
     print("Labels:", ", ".join(allowed.values()))
     last = labels[0] if labels else ""

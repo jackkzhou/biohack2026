@@ -25,6 +25,9 @@ import numpy as np
 from backend.config import settings
 from backend.inference import Inference, ModelClassifier, load_phrases
 from backend.reader import Reader
+from ml.tare import TareCalibrator
+
+TARE_SECONDS = 1.5
 
 
 USE_COLOR = sys.stdout.isatty()
@@ -57,7 +60,7 @@ def runners_up(clf: VerboseClassifier, n: int = 3) -> str:
     return "  ".join(f"{clf.labels[i]} {clf.last[i]:.2f}" for i in order)
 
 
-async def run_fixed(reader: Reader, clf: VerboseClassifier, every: float, t0: float) -> None:
+async def run_fixed(reader: Reader, clf: VerboseClassifier, every: float, t0: float, calibrator: TareCalibrator) -> None:
     """Every `every` seconds classify the newest `every` seconds of both sensors."""
     loop = asyncio.get_running_loop()
     while True:
@@ -68,6 +71,7 @@ async def run_fixed(reader: Reader, clf: VerboseClassifier, every: float, t0: fl
         chin, head = reader.window_both(now - every, now)
         if len(chin) < 5 or len(head) < 5:
             continue
+        chin, head = calibrator.apply(chin, head)
         label, conf = await loop.run_in_executor(None, clf.classify, chin, head)
         bar = "█" * round(conf * 10) + "░" * (10 - round(conf * 10))
         stamp = f"{time.monotonic() - t0:6.1f}s"
@@ -82,7 +86,7 @@ def meter_line(reader: Reader, inf: Inference) -> str:
     now = reader.latest_time()
     if now is None:
         return "no samples yet"
-    chin, head = reader.window_both(now - 0.15, now)
+    chin, head = inf.calibrator.apply(*reader.window_both(now - 0.15, now))
     level = inf._activity(chin, head)
     thr = inf.threshold
     cells = 24
@@ -130,13 +134,36 @@ async def main(every: float | None = None, meter: bool = False, show_phrase: boo
     async def on_phrase(words: list[str], sentence: str) -> None:
         pass
 
+    reader.start()
+    calibrator = TareCalibrator()
+    print("Waiting for sensors...")
+    for _ in range(100):
+        if reader.connected:
+            break
+        await asyncio.sleep(0.2)
+    else:
+        raise SystemExit("No data from the ESP32. Check SERIAL_PORT and that the firmware is flashed.")
+    await asyncio.sleep(1.2)  # let the quaternion fusion warm up
+    try:
+        await asyncio.to_thread(input, "Hold the jaw and head still in a neutral pose, then press Enter to tare... ")
+    except EOFError:
+        pass
+    tare_t0 = time.time()
+    await asyncio.sleep(TARE_SECONDS)
+    chin, head = reader.window_both(tare_t0, time.time())
+    try:
+        calibrator.tare(chin, head)
+        print("Tare OK.")
+    except ValueError as e:
+        print(f"Tare failed ({e}); continuing without orientation calibration.")
+
     inf = Inference(
         reader, classifier, emit, on_phrase, load_phrases(settings.models_dir),
         conf_threshold=settings.conf_threshold, pause_s=settings.phrase_pause_s,
         activity_threshold=settings.activity_threshold, on_detection=on_detection,
+        calibrator=calibrator,
     )
-    reader.start()
-    task = asyncio.create_task(run_fixed(reader, classifier, every, t0) if every else inf.run())
+    task = asyncio.create_task(run_fixed(reader, classifier, every, t0, calibrator) if every else inf.run())
     print(f"reading {settings.serial_port or 'fake stream'} ... (Ctrl+C to quit)")
     was = None
     try:

@@ -26,6 +26,7 @@ from backend.inference import GroundTruthClassifier, Inference, ModelClassifier,
 from backend.reader import Reader
 from backend.recorder import Recorder, RecorderError, Transcriber
 from backend.tts import TTS
+from ml.tare import TareCalibrator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
 log = logging.getLogger("main")
@@ -64,8 +65,9 @@ reader = Reader(settings.serial_port, settings.serial_baud, settings.fake_stream
 db = Database(settings.tiger_db_url, settings.store_raw_stream)
 tts = TTS(settings.elevenlabs_api_key, settings.elevenlabs_voice_id, settings.elevenlabs_model)
 fake = FakeStream(reader) if settings.fake_stream else None
+calibrator = TareCalibrator()
 recorder = Recorder(reader, db, settings.data_dir, Transcriber(settings.whisper_model, settings.whisper_language), VOCAB,
-                    settings.learn_pad_ms, settings.learn_audio_offset_ms)
+                    settings.learn_pad_ms, settings.learn_audio_offset_ms, calibrator)
 inference: Inference  # built in lifespan (needs the running loop for its callbacks)
 
 
@@ -138,6 +140,7 @@ async def lifespan(app: FastAPI):
         reader, classifier, hub.broadcast, on_phrase, load_phrases(settings.models_dir),
         conf_threshold=settings.conf_threshold, pause_s=settings.phrase_pause_s,
         activity_threshold=settings.activity_threshold, on_detection=db.save_detection,
+        calibrator=calibrator,
     )
     recorder.on_rest_noise = inference.calibrate
     if fake:
@@ -239,6 +242,14 @@ async def delete_clip(clip_id: int) -> Response:
 @app.post("/record/rest-pose", status_code=204)
 async def rest_pose(body: SessionBody) -> Response:
     await recorder.rest_pose(body.session)
+    return Response(status_code=204)
+
+
+@app.post("/record/tare", status_code=204)
+async def tare() -> Response:
+    """Hold the jaw and head still in a neutral pose while this runs (~1.5 s):
+    stores the jaw->head orientation offset for the rest of the session."""
+    await recorder.tare()
     return Response(status_code=204)
 
 

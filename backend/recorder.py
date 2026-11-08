@@ -18,12 +18,14 @@ import numpy as np
 from backend.db import Database
 from backend.inference import activity_level
 from backend.reader import SENSOR_CHIN, SENSOR_HEAD, Reader
+from ml.tare import TareCalibrator
 
 log = logging.getLogger("recorder")
 
 CSV_HEADER = "t,t_esp,gx,gy,gz,ax,ay,az,qw,qx,qy,qz,sensor"
 MIN_ROWS_PER_SENSOR = 5
 REST_SECONDS = 2.0
+TARE_SECONDS = 1.5
 CACHE_CLIPS = 200
 
 
@@ -73,8 +75,9 @@ class Transcriber:
 
 class Recorder:
     def __init__(self, reader: Reader, db: Database, data_dir: Path, transcriber: Transcriber, vocab: list[str],
-                 pad_ms: float = 80, audio_offset_ms: float = 0) -> None:
+                 pad_ms: float = 80, audio_offset_ms: float = 0, calibrator: TareCalibrator | None = None) -> None:
         self.reader, self.db, self.transcriber = reader, db, transcriber
+        self.calibrator = calibrator or TareCalibrator()
         self.clip_dir = data_dir / "clips"
         self.voice_dir = data_dir / "voice"
         self.clip_dir.mkdir(parents=True, exist_ok=True)
@@ -111,8 +114,23 @@ class Recorder:
         chin, head = self.reader.window_both(t0, t1)
         if len(chin) < MIN_ROWS_PER_SENSOR or len(head) < MIN_ROWS_PER_SENSOR:
             raise RecorderError("no sensor data for that time window", 503)
+        chin, head = self.calibrator.apply(chin, head)
         rows = np.vstack([chin, head])
         return rows[np.argsort(rows[:, 0], kind="stable")]
+
+    async def tare(self, seconds: float = TARE_SECONDS) -> None:
+        """Hold both sensors still in a neutral pose for `seconds`, then store the jaw->head
+        orientation offset for the rest of this session (see ml.tare). Call this once, right
+        after the hat goes on, before recording or running live inference."""
+        t0 = time.time()
+        await asyncio.sleep(seconds)
+        chin, head = self.reader.window_both(t0, time.time())
+        if len(chin) < MIN_ROWS_PER_SENSOR or len(head) < MIN_ROWS_PER_SENSOR:
+            raise RecorderError("no sensor data for the tare pose", 503)
+        try:
+            self.calibrator.tare(chin, head)
+        except ValueError as e:
+            raise RecorderError(f"tare failed: {e}", 503) from e
 
     # ---- manual recording ------------------------------------------------
     def start(self, label: str, session: int) -> None:
@@ -137,6 +155,7 @@ class Recorder:
         chin, head = self.reader.window_both(t0, time.time())
         if len(chin) < MIN_ROWS_PER_SENSOR or len(head) < MIN_ROWS_PER_SENSOR:
             raise RecorderError("no sensor data for the rest pose", 503)
+        chin, head = self.calibrator.apply(chin, head)
         rms = activity_level(chin, head)
         self.db.save_rest_pose(session, chin[:, 2:8].mean(0).tolist(), head[:, 2:8].mean(0).tolist(), rms)
         if self.on_rest_noise:
