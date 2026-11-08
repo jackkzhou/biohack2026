@@ -54,8 +54,10 @@ def clone_voice_from_file(file_path: str, voice_name: str = "cloned_user_voice")
     client = _get_client()
     with open(path, "rb") as f:
         # elevenlabs>=1.0 moved instant voice cloning under voices.ivc; older SDKs have voices.add.
+        # labels={} is required: this SDK's raw client always does json.dumps(labels), even when
+        # unset, sending the literal string "null" that the API rejects as "not a serialized dict."
         if hasattr(client.voices, "ivc"):
-            voice = client.voices.ivc.create(name=voice_name, files=[f])
+            voice = client.voices.ivc.create(name=voice_name, files=[f], labels={})
         else:
             voice = client.voices.add(name=voice_name, files=[f])
 
